@@ -1,3 +1,5 @@
+![Feathercut](assets/feather.png)
+
 # Feathercut
 
 Lightweight video editor with target file size compression.
