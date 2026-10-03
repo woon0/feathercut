@@ -1,0 +1,586 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Glass, Action, Heading, Label, TimeField, Choice, Select, AmountSlider, CaptionButton } from "glass.slint";
+
+export component MainWindow inherits Window {
+    title: "Feathercut · Testing";
+    icon: @image-url("../../assets/feather.png");
+    no-frame: true;
+    min-width: 900px; min-height: 660px;
+    preferred-width: 1060px; preferred-height: 720px;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+    background: transparent;
+    in-out property <bool> has-video: false;
+    in-out property <image> video-frame;
+    in-out property <bool> is-loading: false;
+    in-out property <int> media-generation: 0;
+    in-out property <bool> drop-hovered: false;
+    in-out property <[image]> thumbnails;
+    in-out property <int> fps-idx: 0;
+    in-out property <float> volume: 80;
+    in-out property <bool> keyframes-ready: false;
+    in-out property <string> copy-range-summary: "Finding source keyframes…";
+    callback set-volume(float);
+    callback snap-copy-range();
+    in-out property <string> file-name: "";
+    in-out property <string> file-path: "";
+    in-out property <string> file-size-str: "";
+    in-out property <string> video-info-str: "";
+    in-out property <string> status-message: "Ready";
+
+    in-out property <bool> is-playing: false;
+    in-out property <bool> is-scrubbing: false;
+    in-out property <float> current-time-secs: 0.0;
+    in-out property <float> duration-secs: 1.0;
+    in-out property <string> timecode-display: "00:00.0 / 00:00.0";
+    in-out property <bool> is-ctrl-held: false;
+
+    // Trim Boundary State
+    in-out property <float> in-point-secs: 0.0;
+    in-out property <float> out-point-secs: 1.0;
+    in-out property <bool> in-drag-snapped: false;
+    in-out property <bool> out-drag-snapped: false;
+    in-out property <string> trim-summary-str: "00:00.0 – 00:00.0 • 0.0s";
+
+    // Export Modal State
+    in-out property <bool> show-export-modal: false;
+    in-out property <int> export-mode-idx: 0; // 0 = Target Size Encode, 1 = Lossless Copy
+    in-out property <float> target-size-mb: 10.0;
+    in-out property <string> target-size-str: "10.0";
+    in-out property <int> codec-idx: 3; // 0 = NVENC 10-bit H.265, 1 = x265 10-bit, 2 = NVENC H.264, 3 = x264
+    in-out property <int> preset-idx: 1; // 0 = Fast, 1 = Balanced, 2 = Quality
+    in-out property <string> estimated-bitrate-str: "7,927 kbps";
+    in-out property <bool> is-exporting: false;
+    in-out property <string> export-status-text: "";
+
+    callback choose-file();
+    callback clear-file();
+    callback toggle-play();
+    callback seek(float);
+    callback step-frame(int);
+    callback set-in-to-playhead();
+    callback set-out-to-playhead();
+    callback reset-trim();
+    callback update-in-point(float);
+    callback update-out-point(float);
+
+    // Export Callbacks
+    callback open-export-modal();
+    callback close-export-modal();
+    callback set-target-size(float);
+    callback target-size-edited(string);
+    callback start-export();
+
+    in-out property <bool> backdrop-available: false;
+    in-out property <float> transparency: 55;
+    in-out property <int> theme-idx: 0;
+    changed theme-idx => { Theme.monochrome = root.theme-idx == 1; }
+    in-out property <float> blur-amount: 25;
+    in-out property <bool> show-settings: false;
+    callback appearance-changed();
+    changed show-settings => { root.is-ctrl-held = false; if root.show-settings { settings-focus.focus(); } else { keys.focus(); } }
+    in-out property <bool> maximized: false;
+    in-out property <string> in-time-text: "00:00.0";
+    in-out property <string> out-time-text: "00:01.0";
+    in-out property <string> end-time-text: "00:01.0";
+    in-out property <string> selection-duration-text: "1.0 seconds";
+    in-out property <float> source-fps: 30;
+    callback refresh-trim-labels();
+    changed in-point-secs => { root.refresh-trim-labels(); }
+    changed out-point-secs => { root.refresh-trim-labels(); }
+    changed duration-secs => { root.refresh-trim-labels(); }
+    callback edit-trim(bool, string);
+    callback step-trim(bool, int);
+    callback window-command(int);
+    callback resize-window(int);
+    changed show-export-modal => { root.is-ctrl-held = false; if root.show-export-modal { modal-focus.focus(); } else { keys.focus(); } }
+    forward-focus: keys;
+    keys := FocusScope {
+        enabled: !root.show-export-modal && !root.show-settings;
+        key-pressed(event) => {
+            root.is-ctrl-held = event.modifiers.control;
+            if !root.has-video { return reject; }
+            if event.text == " " { root.toggle-play(); return accept; }
+            if event.text == Key.LeftArrow { root.step-frame(-1); return accept; }
+            if event.text == Key.RightArrow { root.step-frame(1); return accept; }
+            if event.text == "i" || event.text == "I" { root.set-in-to-playhead(); return accept; }
+            if event.text == "o" || event.text == "O" { root.set-out-to-playhead(); return accept; }
+            if event.text == "r" || event.text == "R" { root.reset-trim(); return accept; }
+            return reject;
+        }
+        key-released(event) => { root.is-ctrl-held = event.modifiers.control; return reject; }
+    }
+
+    // Keep the shell translucent; give editing tools their own readable backing.
+    out property <length> timeline-left: editing.x;
+    out property <length> timeline-top: editing.y + editor-row.y + timeline.y;
+    out property <length> timeline-width: timeline.width;
+    out property <length> volume-left: editing.x + editor-row.x + transport.x + volume-group.x + volume-track.x;
+    out property <length> volume-top: editing.y + editor-row.y + transport.y + volume-group.y + volume-track.y;
+    out property <length> volume-width: volume-track.width;
+    out property <bool> editor-visible: editing.visible;
+    out property <bool> import-visible: welcome.visible;
+
+    workspace := FocusScope {
+        enabled: !root.show-export-modal && !root.show-settings;
+        // Slider arrow keys stay local; rejected shortcuts bubble here so
+        // playback and trimming still work after interacting with a control.
+        key-pressed(event) => {
+            root.is-ctrl-held = event.modifiers.control;
+            if !root.has-video { return reject; }
+            if event.text == " " { root.toggle-play(); return accept; }
+            if event.text == Key.LeftArrow { root.step-frame(-1); return accept; }
+            if event.text == Key.RightArrow { root.step-frame(1); return accept; }
+            if event.text == "i" || event.text == "I" { root.set-in-to-playhead(); return accept; }
+            if event.text == "o" || event.text == "O" { root.set-out-to-playhead(); return accept; }
+            if event.text == "r" || event.text == "R" { root.reset-trim(); return accept; }
+            return reject;
+        }
+        key-released(event) => { root.is-ctrl-held = event.modifiers.control; return reject; }
+        shell := Rectangle {
+            width: root.width; height: root.height;
+            border-radius: root.maximized ? 0px : 8px;
+            background: @linear-gradient(135deg, Theme.surface.with-alpha(1 - root.transparency / 100), Theme.base.with-alpha(1 - root.transparency / 100) 55%, Theme.end.with-alpha(1 - root.transparency / 100));
+            animate background { duration: 180ms; }
+            border-width: 1px; border-color: Theme.rim.with-alpha(105 / 255);
+            Rectangle {
+                x: 12px; y: 1px; width: parent.width - 24px; height: 1px;
+                background: @linear-gradient(90deg, #ffffff00, Theme.sheen.with-alpha(180 / 255), #ffffff00);
+            }
+            Rectangle {
+                x: 0px; y: 0px; height: 48px; width: parent.width;
+                TouchArea {
+                    width: parent.width - 138px;
+                    pointer-event(event) => { if event.kind == PointerEventKind.down && event.button == PointerEventButton.left { root.window-command(3); } }
+                    double-clicked => { root.window-command(1); }
+                }
+                Image { x: 20px; y: 10px; width: 28px; height: 28px; source: @image-url("../../assets/feather.png"); image-fit: contain; }
+                Text { x: 60px; height: parent.height; text: "Feathercut"; color: Theme.ink; font-size: 15px; vertical-alignment: center; }
+                Label { x: 140px; height: parent.height; text: "Testing"; font-size: 11px; }
+                for cmd in [0, 1, 2] : CaptionButton {
+                    x: parent.width - (3 - cmd) * 46px; y: 2px;
+                    command: cmd; maximized: root.maximized; clicked => { root.window-command(cmd); }
+                }
+            }
+
+            welcome := FocusScope {
+                x: 24px; y: 64px; width: parent.width - 48px; height: parent.height - 112px;
+                opacity: root.has-video ? 0 : 1;
+                visible: self.opacity > 0; enabled: !root.has-video;
+                animate opacity { duration: 160ms; }
+                Rectangle {
+                    width: parent.width; height: parent.height; border-radius: 12px;
+                    background: @linear-gradient(135deg, Theme.surface.with-alpha(100 / 255), Theme.panel.with-alpha(160 / 255), Theme.surface.with-alpha(115 / 255));
+                    border-width: root.drop-hovered ? 2px : 0px; border-color: Theme.rim;
+                    animate border-color { duration: 140ms; }
+                    Rectangle {
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        width: Math.min(520px, parent.width - 48px); height: 340px;
+                        VerticalLayout {
+                            spacing: 16px; alignment: center;
+                            Rectangle {
+                                height: 76px;
+                                Image { x: (parent.width - self.width) / 2; width: 64px; height: 72px; source: @image-url("../../assets/feather.png"); image-fit: contain; }
+                            }
+                            Heading { height: 44px; text: "A little less video."; font-size: 34px; horizontal-alignment: center; }
+                            Text { height: 24px; text: root.is-loading ? "Opening your video…" : (root.drop-hovered ? "Release to open your video" : "Drop a video here. Keep the part that matters."); color: Theme.muted; font-size: 15px; horizontal-alignment: center; }
+                            Rectangle {
+                                height: 48px;
+                                Action { x: (parent.width - self.width) / 2; width: 176px; height: 48px; primary: true; text: root.is-loading ? "Opening…" : "Choose video"; icon-path: "M 1 3 L 6 3 L 8 5 L 16 5 L 16 15 L 1 15 Z"; enabled: !root.is-loading; clicked => { root.choose-file(); keys.focus(); } }
+                            }
+                            Label { height: 20px; text: "MP4 · MOV · MKV · WebM"; horizontal-alignment: center; }
+                        }
+                    }
+                    if root.is-loading : Rectangle { y: parent.height - 3px; width: parent.width; height: 3px; background: Theme.accent; }
+                }
+            }
+
+            editing := FocusScope {
+                x: 24px; y: 64px; width: parent.width - 48px; height: parent.height - 112px;
+                opacity: root.has-video ? 1 : 0;
+                visible: self.opacity > 0; enabled: root.has-video;
+                animate opacity { duration: 160ms; }
+                VerticalLayout {
+                    spacing: 16px;
+                    Rectangle {
+                        height: 32px; vertical-stretch: 0;
+                        HorizontalLayout {
+                            spacing: 16px;
+                            Text { text: root.file-name; color: Theme.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            Label { text: root.video-info-str; }
+                            Action { width: 104px; height: 32px; quiet: true; text: "Close video"; label: "Close current video"; icon-path: "M 4 4 L 13 13 M 4 13 L 13 4"; enabled: !root.is-loading; clicked => { root.clear-file(); keys.focus(); } }
+                        }
+                    }
+                    editor-row := HorizontalLayout {
+                        spacing: 16px;
+                        VerticalLayout {
+                            spacing: 16px; horizontal-stretch: 1;
+                            preview := Rectangle {
+                                vertical-stretch: 1; min-height: 240px; border-radius: 8px; clip: true;
+                                background: Theme.preview;
+                                Image { width: parent.width; height: parent.height; source: root.video-frame; image-fit: contain; }
+                                Rectangle {
+                                    width: parent.width; height: parent.height; border-radius: 8px;
+                                    opacity: root.drop-hovered ? 1 : 0; visible: self.opacity > 0;
+                                    animate opacity { duration: 140ms; }
+                                    border-width: 2px; border-color: Theme.rim; background: Theme.preview.with-alpha(215 / 255);
+                                    Text { text: "Release to replace this video"; color: Theme.ink; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                if root.is-loading : Rectangle { y: parent.height - 3px; height: 3px; width: parent.width; background: Theme.accent; }
+                            }
+                            timeline := Rectangle {
+                                height: 92px; vertical-stretch: 0;
+                                track := Glass {
+                                    y: 2px; height: 63px; width: parent.width; border-radius: 7px; clip: true;
+                                    HorizontalLayout {
+                                        visible: root.has-video;
+                                        spacing: 0px;
+                                        for thumb in root.thumbnails : Image { source: thumb; image-fit: cover; horizontal-stretch: 1; }
+                                    }
+                                    Rectangle {
+                                        x: 0px;
+                                        width: root.in-point-secs / Math.max(root.duration-secs, 0.001) * parent.width;
+                                        height: parent.height; background: Theme.scrim.with-alpha(168 / 255);
+                                    }
+                                    Rectangle {
+                                        x: root.out-point-secs / Math.max(root.duration-secs, 0.001) * parent.width;
+                                        width: parent.width - self.x; height: parent.height; background: Theme.scrim.with-alpha(168 / 255);
+                                    }
+                                    Rectangle {
+                                        x: root.in-point-secs / Math.max(root.duration-secs, 0.001) * parent.width;
+                                        width: (root.out-point-secs - root.in-point-secs) / Math.max(root.duration-secs, 0.001) * parent.width;
+                                        height: parent.height; background: Theme.selected.with-alpha(56 / 255); border-width: 1px; border-color: Theme.rim.with-alpha(158 / 255);
+                                    }
+                                    seek-touch := TouchArea {
+                                        mouse-cursor: pointer; enabled: root.has-video;
+                                        pointer-event(event) => {
+                                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                                keys.focus(); if root.is-playing { root.toggle-play(); }
+                                                root.is-scrubbing = true;
+                                                root.seek(self.mouse-x / self.width * root.duration-secs);
+                                            }
+                                            if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel { root.is-scrubbing = false; }
+                                        }
+                                        moved => { if self.pressed { root.seek(Math.max(0, Math.min(1, self.mouse-x / self.width)) * root.duration-secs); } }
+                                    }
+                                }
+                                for is-out in [false, true] : Rectangle {
+                                    visible: root.has-video;
+                                    in property <float> point: is-out ? root.out-point-secs : root.in-point-secs;
+                                    in-out property <length> grab-offset;
+                                    x: Math.max(0px, Math.min(track.width - 18px, self.point / Math.max(root.duration-secs, 0.001) * track.width - 9px));
+                                    y: 17px; width: 18px; height: 34px;
+                                    border-radius: 6px; border-width: 1px; border-color: Theme.knob;
+                                    background: @linear-gradient(100deg, Theme.knob, Theme.accent);
+                                    drop-shadow-blur: 10px; drop-shadow-color: Theme.glow.with-alpha(102 / 255);
+                                    Rectangle { x: 5px; y: 10px; width: 2px; height: 14px; border-radius: 1px; background: Theme.dark-ink; }
+                                    Rectangle { x: 10px; y: 10px; width: 2px; height: 14px; border-radius: 1px; background: Theme.dark-ink; }
+                                    handle-touch := TouchArea {
+                                        mouse-cursor: ew-resize; enabled: root.has-video;
+                                        pointer-event(event) => {
+                                            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                                                keys.focus(); if root.is-playing { root.toggle-play(); }
+                                                parent.grab-offset = parent.x + self.mouse-x - parent.point / Math.max(root.duration-secs, 0.001) * track.width;
+                                                root.is-scrubbing = true;
+                                                if is-out { root.out-drag-snapped = Math.abs(root.current-time-secs - root.out-point-secs) <= 0.25; }
+                                                else { root.in-drag-snapped = Math.abs(root.current-time-secs - root.in-point-secs) <= 0.25; }
+                                            }
+                                            if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                                                root.is-scrubbing = false; root.in-drag-snapped = false; root.out-drag-snapped = false;
+                                            }
+                                        }
+                                        moved => {
+                                            if self.pressed {
+                                                let target = (parent.x + self.mouse-x - parent.grab-offset) / track.width * root.duration-secs;
+                                                if is-out { root.update-out-point(target); } else { root.update-in-point(target); }
+                                            }
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    x: Math.max(1px, Math.min(track.width - 2px, root.current-time-secs / Math.max(root.duration-secs, 0.001) * track.width));
+                                    visible: root.has-video;
+                                    y: -3px; width: 1.5px; height: 74px; background: root.has-video ? Theme.accent : #ffffff00;
+                                    Rectangle { x: -4px; y: -2px; width: 10px; height: 10px; border-radius: 5px; background: Theme.accent-strong; border-width: 1px; border-color: Theme.rim; }
+                                }
+                                Label { visible: root.has-video; x: 0px; y: 73px; text: "00:00.0"; }
+                                Label { visible: root.has-video; y: 73px; x: parent.width - self.width; text: root.end-time-text; }
+                                if root.has-video && root.in-point-secs > root.duration-secs * 0.13 && root.in-point-secs < root.duration-secs * 0.87 : Label {
+                                    y: 73px; x: root.in-point-secs / root.duration-secs * parent.width - self.width / 2; text: root.in-time-text;
+                                }
+                                if root.has-video && root.out-point-secs > root.duration-secs * 0.13 && root.out-point-secs < root.duration-secs * 0.87 && root.out-point-secs - root.in-point-secs > root.duration-secs * 0.17 : Label {
+                                    y: 73px; x: root.out-point-secs / root.duration-secs * parent.width - self.width / 2; text: root.out-time-text;
+                                }
+                                if !root.has-video : Rectangle {
+                                    width: parent.width; height: parent.height; background: Theme.panel.with-alpha(96 / 255);
+                                    Label { text: "Your timeline will appear here"; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                            }
+
+                            transport := Rectangle {
+                                height: 56px; vertical-stretch: 0;
+                                border-radius: 8px; background: Theme.panel.with-alpha(210 / 255);
+                                HorizontalLayout {
+                                    spacing: 8px; padding-left: 8px; padding-right: 8px; padding-top: 6px; padding-bottom: 6px;
+                                    Action { width: 36px; height: 40px; quiet: true; label: "Previous frame · Left arrow"; icon-path: "M 3 3 L 3 14 M 13 3 L 5 8 L 13 14 Z"; clicked => { root.step-frame(-1); keys.focus(); } }
+                                    Action {
+                                        width: 44px; height: 44px; border-radius: 22px; primary: true;
+                                        icon-path: root.is-playing ? "M 5 3 L 5 14 M 11 3 L 11 14" : "M 4 2 L 14 8 L 4 14 Z";
+                                        label: root.is-playing ? "Pause · Space" : "Play · Space"; fill-icon: !root.is-playing;
+                                        clicked => { root.toggle-play(); keys.focus(); }
+                                    }
+                                    Action { width: 36px; height: 40px; quiet: true; label: "Next frame · Right arrow"; icon-path: "M 13 3 L 13 14 M 3 3 L 11 8 L 3 14 Z"; clicked => { root.step-frame(1); keys.focus(); } }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 2px;
+                                        Text { text: root.timecode-display; font-family: "Consolas"; font-size: 13px; color: Theme.ink; }
+                                        Label { text: root.is-playing ? "Playing" : "Paused · Space to play"; font-size: 11px; }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    volume-group := Rectangle {
+                                        width: 136px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Action {
+                                                width: 28px; height: 32px; quiet: true;
+                                                label: root.volume > 0 ? "Mute audio" : "Unmute audio";
+                                                icon-path: root.volume > 0 ? "M 1 6 L 4 6 L 8 2 L 8 15 L 4 11 L 1 11 Z M 11 5 Q 15 8 11 12" : "M 1 6 L 4 6 L 8 2 L 8 15 L 4 11 L 1 11 Z M 11 6 L 16 11 M 16 6 L 11 11";
+                                                clicked => { root.set-volume(root.volume > 0 ? 0 : 80); keys.focus(); }
+                                            }
+                                            volume-track := AmountSlider {
+                                                value <=> root.volume; label: "Playback volume";
+                                                changed => { root.set-volume(self.value); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 232px; horizontal-stretch: 0; border-radius: 12px;
+                            background: Theme.panel.with-alpha(210 / 255);
+                            VerticalLayout {
+                                padding: 16px; spacing: 16px;
+                    Text { text: "Trim selection"; font-size: 16px; font-weight: 600; color: Theme.ink; height: 24px; }
+                                VerticalLayout {
+                                    spacing: 8px;
+                                    TimeField { label: "In"; value: root.in-time-text; edited(value) => { root.edit-trim(false, value); } step(delta) => { root.step-trim(false, delta); } }
+                                    TimeField { label: "Out"; value: root.out-time-text; edited(value) => { root.edit-trim(true, value); } step(delta) => { root.step-trim(true, delta); } }
+                                }
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Label { text: "Selected duration"; height: 18px; }
+                                    Text { text: root.selection-duration-text; color: Theme.ink; font-size: 20px; height: 28px; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Action { text: "Set in"; shortcut: "I"; clicked => { root.set-in-to-playhead(); keys.focus(); } }
+                                    Action { text: "Set out"; shortcut: "O"; clicked => { root.set-out-to-playhead(); keys.focus(); } }
+                                }
+                                Action { text: "Reset selection"; shortcut: "R"; quiet: true; clicked => { root.reset-trim(); keys.focus(); } }
+                                Rectangle { vertical-stretch: 1; }
+                                Label { text: "Drag the timeline handles\nto adjust your selection."; wrap: word-wrap; height: 36px; font-size: 11px; }
+                                Action { height: 44px; text: "Export cut"; primary: true; icon-path: "M 1 7 L 1 16 L 16 16 L 16 7 M 8 12 L 8 1 M 4 5 L 8 1 L 12 5"; clicked => { root.open-export-modal(); } }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                x: 24px; y: parent.height - 40px; width: parent.width - 48px; height: 32px; spacing: 16px;
+                Label { text: root.status-message; overflow: elide; font-size: 11px; horizontal-stretch: 1; }
+                Action {
+                    width: 32px; height: 32px; quiet: true; label: "Settings";
+                    icon-path: "M 6 1 L 10 1 L 11 4 L 14 4 L 16 7 L 14 10 L 14 13 L 11 15 L 8 13 L 5 15 L 2 13 L 2 10 L 0 7 L 2 4 L 5 4 Z M 11 8 A 3 3 0 1 1 5 8 A 3 3 0 1 1 11 8";
+                    clicked => { root.show-settings = true; }
+                }
+            }
+        }
+    }
+    settings-layer := Rectangle {
+        opacity: root.show-settings ? 1 : 0;
+        visible: root.show-settings || self.opacity > 0;
+        animate opacity { duration: 150ms; }
+        width: parent.width; height: parent.height; background: Theme.scrim.with-alpha(102 / 255);
+        TouchArea { enabled: root.show-settings; clicked => { } }
+        settings-focus := FocusScope {
+            enabled: root.show-settings;
+            changed enabled => { if self.enabled { self.focus(); } }
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.show-settings = false; return accept; }
+                return reject;
+            }
+            Glass {
+                x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + (1 - settings-layer.opacity) * 8px;
+                width: 440px; height: 465px;
+                border-radius: 16px; border-color: Theme.rim.with-alpha(168 / 255);
+                background: @linear-gradient(140deg, Theme.settings, Theme.modal-low);
+                drop-shadow-blur: 35px; drop-shadow-color: Theme.scrim.with-alpha(136 / 255);
+                VerticalLayout {
+                    padding: 24px; spacing: 16px;
+                    Text { text: "Settings"; color: Theme.ink; font-size: 22px; font-weight: 600; height: 32px; }
+                    Label { text: "Appearance"; height: 18px; }
+                    VerticalLayout {
+                        spacing: 8px;
+                        Label { text: "Theme"; }
+                        Choice { options: ["Lilac", "Monochrome"]; index <=> root.theme-idx; changed => { root.appearance-changed(); } }
+                    }
+                    VerticalLayout {
+                        spacing: 5px;
+                        HorizontalLayout {
+                            Text { text: "Transparency"; color: Theme.ink; horizontal-stretch: 1; }
+                            Label { text: Math.round(root.transparency) + "%"; }
+                        }
+                        AmountSlider { label: "Transparency"; value <=> root.transparency; changed => { root.appearance-changed(); } }
+                        HorizontalLayout { Label { text: "Solid"; } Rectangle { horizontal-stretch: 1; } Label { text: "Clear"; } }
+                    }
+                    VerticalLayout {
+                        spacing: 5px;
+                        HorizontalLayout {
+                            Text { text: "Background blur"; color: Theme.ink; horizontal-stretch: 1; }
+                            Label { text: Math.round(root.blur-amount) + "%"; }
+                        }
+                        AmountSlider { label: "Background blur"; value <=> root.blur-amount; enabled: root.transparency > 0; changed => { root.appearance-changed(); } }
+                        HorizontalLayout { Label { text: "None"; } Rectangle { horizontal-stretch: 1; } Label { text: "Soft"; } }
+                    }
+                    Label {
+                        height: 32px; wrap: word-wrap;
+                        text: root.transparency <= 0 ? "Solid background. Appearance is saved automatically." : (root.blur-amount > 0 && !root.backdrop-available ? "Desktop blur is unavailable here. Transparency remains adjustable." : "Video and text stay opaque. Appearance is saved automatically.");
+                    }
+                    Action { height: 38px; text: "Done"; primary: true; clicked => { root.show-settings = false; } }
+                }
+            }
+        }
+    }
+
+    // Modal input shield and focus scope keep editor shortcuts out of export.
+    modal-layer := Rectangle {
+        width: parent.width; height: parent.height; background: Theme.scrim.with-alpha(119 / 255);
+        opacity: root.show-export-modal ? 1 : 0;
+        visible: root.show-export-modal || self.opacity > 0;
+        animate opacity { duration: 150ms; }
+        TouchArea { enabled: root.show-export-modal; clicked => { } }
+        modal-focus := FocusScope {
+            enabled: root.show-export-modal;
+            visible: root.show-export-modal || modal-layer.opacity > 0;
+            changed enabled => { if self.enabled { self.focus(); } }
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.close-export-modal(); return accept; }
+                return reject;
+            }
+            Glass {
+                x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + (1 - modal-layer.opacity) * 8px;
+                width: 418px; height: Math.min(root.height - 40px, 826px);
+                border-radius: 16px; border-color: Theme.rim.with-alpha(168 / 255);
+                background: @linear-gradient(140deg, Theme.modal.with-alpha(238 / 255), Theme.modal-low.with-alpha(245 / 255) 55%, Theme.modal-end.with-alpha(241 / 255));
+                drop-shadow-blur: 42px; drop-shadow-offset-y: 12px; drop-shadow-color: Theme.scrim.with-alpha(158 / 255);
+                VerticalLayout {
+                    padding: 22px; spacing: 13px;
+                    HorizontalLayout {
+                        height: 30px; vertical-stretch: 0;
+                        Heading { text: "Export cut"; font-size: 25px; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Action { width: 30px; height: 28px; text: "×"; quiet: true; clicked => { root.close-export-modal(); } }
+                    }
+                    Label { text: root.file-name + " · " + root.selection-duration-text; overflow: elide; height: 16px; vertical-stretch: 0; }
+                    Choice { options: ["Target size", "Lossless", "Fast copy"]; index <=> root.export-mode-idx; enabled: !root.is-exporting; vertical-stretch: 0; }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 12px; padding-right: 4px;
+                            if root.export-mode-idx == 0 : VerticalLayout {
+                                spacing: 10px;
+                                Glass {
+                                    height: 75px; border-radius: 9px;
+                                    HorizontalLayout {
+                                        padding-left: 22px; padding-right: 10px; spacing: 12px;
+                                        TextInput {
+                                            text <=> root.target-size-str; enabled: !root.is-exporting; color: Theme.ink;
+                                            font-family: "Consolas"; font-size: 44px; single-line: true; vertical-alignment: center;
+                                            selection-background-color: Theme.selection; selection-foreground-color: white;
+                                            edited => { root.target-size-edited(self.text); }
+                                        }
+                                        Rectangle { width: 1px; height: 48px; background: Theme.line; }
+                                        Label { text: "MiB"; color: Theme.ink; font-size: 18px; width: 34px; }
+                                        VerticalLayout {
+                                            width: 26px; spacing: 0px; alignment: center;
+                                            Action { min-width: 24px; icon-path: "M 3 10 L 8 5 L 13 10"; height: 25px; quiet: true; enabled: !root.is-exporting; clicked => { root.set-target-size(root.target-size-mb + 1); } }
+                                            Action { min-width: 24px; icon-path: "M 3 5 L 8 10 L 13 5"; height: 25px; quiet: true; enabled: !root.is-exporting; clicked => { root.set-target-size(root.target-size-mb - 1); } }
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    for size in [8.0, 10.0, 25.0, 50.0, 100.0] : Action {
+                                        height: 34px; text: size + " MiB"; selected: root.target-size-mb == size; enabled: !root.is-exporting;
+                                        clicked => { root.set-target-size(size); }
+                                    }
+                                }
+                                Label { text: "Video  ≈ " + root.estimated-bitrate-str + "\nAudio  128 kbps AAC"; height: 40px; }
+                                Rectangle { height: 1px; background: Theme.line; }
+                                Text { text: "Codec"; color: Theme.ink; height: 18px; }
+                                VerticalLayout {
+                                    spacing: 5px;
+                                    for codec[idx] in ["H.265 10-bit (NVEnc)", "H.265 10-bit (x265)", "H.264 (NVEnc)", "H.264 (x264 · CPU)"] : Glass {
+                                        height: 34px; border-radius: 7px;
+                                        border-color: root.codec-idx == idx ? Theme.rim.with-alpha(102 / 255) : Theme.line;
+                                        HorizontalLayout {
+                                            padding-left: 12px; spacing: 12px;
+                                            Rectangle {
+                                                width: 19px;
+                                                Rectangle {
+                                                y: (parent.height - self.height) / 2; width: 19px; height: 19px; border-radius: 10px; border-width: 1px; border-color: Theme.rim;
+                                                background: root.codec-idx == idx ? Theme.selected : transparent;
+                                                if root.codec-idx == idx : Rectangle { x: 5px; y: 5px; width: 9px; height: 9px; border-radius: 5px; background: Theme.monochrome ? Theme.selected-ink : Theme.knob; }
+                                                }
+                                            }
+                                            Label { text: codec; color: Theme.ink; horizontal-stretch: 1; }
+                                        }
+                                        Action { width: parent.width; height: parent.height; quiet: true; label: codec; enabled: !root.is-exporting; clicked => { root.codec-idx = idx; } }
+                                    }
+                                }
+                                Text { text: "Framerate"; color: Theme.ink; height: 18px; }
+                                Select { options: ["Constant · Source FPS", "Constant · 24 fps", "Constant · 30 fps", "Constant · 60 fps"]; index <=> root.fps-idx; enabled: !root.is-exporting; }
+                                Text { text: "Preset"; color: Theme.ink; height: 18px; }
+                                Choice { options: ["Fast", "Balanced", "Quality"]; index <=> root.preset-idx; enabled: !root.is-exporting; }
+                            }
+                            if root.export-mode-idx == 1 : VerticalLayout {
+                                spacing: 16px;
+                                Text { text: "Every frame, preserved."; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                                Label { text: "Exact trim boundaries with lossless FFV1 video and PCM audio in an MKV file.\n\nLossless files can be much larger than the source. The target size does not apply."; wrap: word-wrap; }
+                            }
+                            if root.export-mode-idx == 2 : VerticalLayout {
+                                spacing: 16px;
+                                Text { text: "Stream copy"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                                Label { text: "Copy the original video and audio without re-encoding. Cut boundaries align to source keyframes."; wrap: word-wrap; }
+                                Label { text: root.copy-range-summary; wrap: word-wrap; }
+                                Action { text: "Use keyframe-aligned selection"; enabled: !root.is-exporting && root.keyframes-ready; clicked => { root.snap-copy-range(); } }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                    }
+                    Rectangle { height: 1px; vertical-stretch: 0; background: Theme.line; }
+                    Label {
+                        height: 34px; vertical-stretch: 0; wrap: word-wrap;
+                        text: root.export-status-text == "" ? "Your selected range: " + root.trim-summary-str : root.export-status-text;
+                    }
+                    HorizontalLayout {
+                        height: 44px; vertical-stretch: 0; spacing: 12px;
+                        Action { width: 118px; height: 44px; text: root.is-exporting ? "Cancel export" : "Cancel"; clicked => { root.close-export-modal(); } }
+                        Action { height: 44px; primary: true; text: root.is-exporting ? "Exporting…" : "Start export"; icon-path: "M 1 7 L 1 16 L 16 16 L 16 7 M 8 12 L 8 1 M 4 5 L 8 1 L 12 5"; enabled: !root.is-exporting; clicked => { root.start-export(); } }
+                    }
+                }
+            }
+        }
+    }
+    // Native drag-resize hit targets are kept outside the content and overlay.
+    for edge[idx] in [0, 1, 2, 3, 4, 5, 6, 7] : TouchArea {
+        enabled: !root.maximized;
+        x: idx == 1 || idx == 3 || idx == 5 ? root.width - 5px : (idx == 6 || idx == 7 ? 8px : 0px);
+        y: idx == 2 || idx == 3 || idx == 7 ? root.height - 5px : (idx == 4 || idx == 5 ? 8px : 0px);
+        width: idx == 6 || idx == 7 ? root.width - 16px : 5px;
+        height: idx == 4 || idx == 5 ? root.height - 16px : 5px;
+        mouse-cursor: idx == 4 || idx == 5 ? ew-resize : (idx == 6 || idx == 7 ? ns-resize : (idx == 0 || idx == 3 ? nwse-resize : nesw-resize));
+        pointer-event(event) => { if event.kind == PointerEventKind.down && event.button == PointerEventButton.left { root.resize-window(edge); } }
+    }
+}
+

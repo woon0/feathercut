@@ -1,0 +1,21 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock.backup
+
+# Local archives and untracked packages
+/_archive/
+/public-release/
+/runtime/
+
+# Editor and IDE configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+.DS_Store

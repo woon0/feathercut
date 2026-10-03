@@ -1,0 +1,680 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Glass, Action, Heading, Label, TimeField, Choice, Select, AmountSlider, CaptionButton, HoverHint } from "glass.slint";
+import { ClipWorkspace, SimpleTrimBar, TimelineClip } from "timeline.slint";
+import { CropOverlay } from "crop.slint";
+
+export component MainWindow inherits Window {
+    title: "Feathercut";
+    icon: @image-url("../assets/feather.png");
+    no-frame: true;
+    min-width: 900px; min-height: 660px;
+    preferred-width: 1060px; preferred-height: 720px;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+    background: transparent;
+    in-out property <bool> has-video: false;
+    in-out property <image> video-frame;
+    in-out property <bool> is-loading: false;
+    in-out property <int> media-generation: 0;
+    in-out property <bool> drop-hovered: false;
+    in-out property <[image]> thumbnails;
+    in-out property <[TimelineClip]> video-clips;
+    in-out property <[TimelineClip]> audio-clips;
+    in-out property <bool> sequence-mode: false;
+    in-out property <bool> advanced-editor: false;
+    in-out property <bool> timeline-busy: false;
+    in-out property <int> video-layers: 1;
+    in-out property <int> audio-layers: 1;
+    in-out property <int> selected-layer: 0;
+    in-out property <[string]> layer-names;
+    in-out property <bool> crop-mode: false;
+    in-out property <float> canvas-aspect: 16/9;
+    in-out property <float> source-width: 1920;
+    in-out property <float> source-height: 1080;
+    in-out property <float> crop-x: 0;
+    in-out property <float> crop-y: 0;
+    in-out property <float> crop-w: 1;
+    in-out property <float> crop-h: 1;
+    in-out property <string> crop-width-text: "1920";
+    in-out property <string> crop-height-text: "1080";
+    in-out property <int> crop-aspect: 0;
+    callback mode-changed();
+    callback add-layer(bool);
+    callback move-selected-layer(int);
+    callback begin-crop();
+    callback crop-commit();
+    callback end-crop();
+    callback reset-crop();
+    callback crop-dimension(bool,string);
+    callback crop-ratio(int);
+    changed advanced-editor => { root.mode-changed(); }
+    property <bool> show-context: false;
+    property <length> context-x;
+    property <length> context-y;
+    in-out property <int> selected-clip: -1;
+    in-out property <string> selected-name;
+    in-out property <bool> selected-audio: false;
+    in-out property <bool> selected-linked: false;
+    in-out property <bool> selected-has-audio: false;
+    in-out property <bool> selected-muted: false;
+    in-out property <float> clip-gain: 100;
+    in-out property <string> audio-position-text: "00:00.0";
+    in-out property <bool> can-undo: false;
+    in-out property <bool> can-redo: false;
+    in-out property <bool> can-fast-copy: true;
+    property <int> drag-clip: -1;
+    property <float> drag-time: 0;
+    property <bool> trimming: false;
+    property <bool> trimming-out: false;
+    property <float> trim-delta: 0;
+    in-out property <float> view-span: 30;
+    in-out property <float> view-start: 0;
+    property <float> timeline-span: root.sequence-mode ? Math.max(1, root.view-span) : root.duration-secs;
+    property <float> timeline-offset: root.sequence-mode ? root.view-start : 0;
+    out property <length> canvas-width: video-canvas.width;
+    out property <length> canvas-height: video-canvas.height;
+    out property <length> preview-left: preview.absolute-position.x;
+    out property <length> preview-top: preview.absolute-position.y;
+    out property <length> preview-width: preview.width;
+    out property <length> preview-height: preview.height;
+    out property <float> timeline-pixels-per-second: (timeline.width - 44px) / 1px / Math.max(root.timeline-span, 0.001);
+    changed current-time-secs => { if root.sequence-mode && root.is-playing && (root.current-time-secs < root.view-start || root.current-time-secs > root.view-start + root.view-span) { root.view-start = Math.max(0, root.current-time-secs - root.view-span * 0.2); } }
+    callback trim-clip(bool, float);
+    callback import-path(string);
+    callback select-clip(int, bool);
+    callback move-clip(int, bool, float, int);
+    callback split-clip();
+    callback remove-clip();
+    callback detach-audio();
+    callback add-audio();
+    callback nudge-clip(int);
+    callback undo-edit(bool);
+    callback change-clip-gain(float);
+    callback mute-clip();
+    callback edit-audio-position(string);
+    in-out property <int> fps-idx: 0;
+    in-out property <float> volume: 80;
+    in-out property <bool> keyframes-ready: false;
+    in-out property <string> copy-range-summary: "Finding source keyframes…";
+    callback set-volume(float);
+    callback snap-copy-range();
+    in-out property <string> file-name: "";
+    in-out property <string> file-path: "";
+    in-out property <string> file-size-str: "";
+    in-out property <string> video-info-str: "";
+    in-out property <string> status-message: "Ready";
+
+    in-out property <bool> is-playing: false;
+    in-out property <bool> is-scrubbing: false;
+    in-out property <float> current-time-secs: 0.0;
+    in-out property <float> duration-secs: 1.0;
+    in-out property <string> timecode-display: "00:00.0 / 00:00.0";
+    in-out property <bool> is-ctrl-held: false;
+
+    // Trim Boundary State
+    in-out property <float> in-point-secs: 0.0;
+    in-out property <float> out-point-secs: 1.0;
+    in-out property <bool> in-drag-snapped: false;
+    in-out property <bool> out-drag-snapped: false;
+    in-out property <string> trim-summary-str: "00:00.0 – 00:00.0 • 0.0s";
+
+    // Export Modal State
+    in-out property <bool> show-export-modal: false;
+    in-out property <int> export-mode-idx: 0; // 0 = Target Size Encode, 1 = Lossless Copy
+    in-out property <float> target-size-mb: 10.0;
+    in-out property <string> target-size-str: "10.0";
+    in-out property <int> codec-idx: 3; // 0 = NVENC 10-bit H.265, 1 = x265 10-bit, 2 = NVENC H.264, 3 = x264
+    in-out property <int> preset-idx: 1; // 0 = Fast, 1 = Balanced, 2 = Quality
+    in-out property <string> estimated-bitrate-str: "7,927 kbps";
+    in-out property <bool> is-exporting: false;
+    in-out property <string> export-status-text: "";
+    in-out property <string> export-summary: "";
+    callback export-mode-changed();
+    changed export-mode-idx => { root.export-mode-changed(); }
+
+    callback choose-file();
+    callback clear-file();
+    callback toggle-play();
+    callback seek(float);
+    callback step-frame(int);
+    callback set-in-to-playhead();
+    callback set-out-to-playhead();
+    callback reset-trim();
+    callback update-in-point(float);
+    callback update-out-point(float);
+
+    // Export Callbacks
+    callback open-export-modal();
+    callback close-export-modal();
+    callback set-target-size(float);
+    callback target-size-edited(string);
+    callback start-export();
+
+    in-out property <bool> backdrop-available: false;
+    in-out property <float> transparency: 55;
+    in-out property <int> theme-idx: 0;
+    changed theme-idx => { Theme.monochrome = root.theme-idx == 1; }
+    in-out property <float> blur-amount: 25;
+    in-out property <bool> show-settings: false;
+    callback appearance-changed();
+    changed show-settings => { root.is-ctrl-held = false; if root.show-settings { settings-focus.focus(); } else { keys.focus(); } }
+    in-out property <bool> maximized: false;
+    in-out property <string> in-time-text: "00:00.0";
+    in-out property <string> out-time-text: "00:01.0";
+    in-out property <string> end-time-text: "00:01.0";
+    in-out property <string> selection-duration-text: "1.0 seconds";
+    in-out property <float> source-fps: 30;
+    callback refresh-trim-labels();
+    changed in-point-secs => { root.refresh-trim-labels(); }
+    changed out-point-secs => { root.refresh-trim-labels(); }
+    changed duration-secs => { root.refresh-trim-labels(); }
+    callback edit-trim(bool, string);
+    callback step-trim(bool, int);
+    callback window-command(int);
+    callback resize-window(int);
+    changed show-export-modal => { root.is-ctrl-held = false; if root.show-export-modal { modal-focus.focus(); } else { keys.focus(); } }
+    forward-focus: keys;
+    keys := FocusScope {
+        enabled: !root.show-export-modal && !root.show-settings;
+        key-pressed(event) => {
+            root.is-ctrl-held = event.modifiers.control;
+            if event.modifiers.control && (event.text == "z" || event.text == "Z") { root.undo-edit(false); return accept; }
+            if event.modifiers.control && (event.text == "y" || event.text == "Y") { root.undo-edit(true); return accept; }
+            if root.show-context && event.text == Key.Escape {root.show-context=false;return accept;}
+            if root.crop-mode {if event.text == Key.Escape {root.end-crop();return accept;}return reject;}
+            if !root.has-video { return reject; }
+            if event.text == "s" || event.text == "S" { root.split-clip(); return accept; }
+            if event.text == Key.Delete { root.remove-clip(); return accept; }
+            if event.text == " " { root.toggle-play(); return accept; }
+            if event.text == Key.LeftArrow { root.step-frame(-1); return accept; }
+            if event.text == Key.RightArrow { root.step-frame(1); return accept; }
+            if event.text == "i" || event.text == "I" { root.set-in-to-playhead(); return accept; }
+            if event.text == "o" || event.text == "O" { root.set-out-to-playhead(); return accept; }
+            if event.text == "r" || event.text == "R" { root.reset-trim(); return accept; }
+            return reject;
+        }
+        key-released(event) => { root.is-ctrl-held = event.modifiers.control; return reject; }
+    }
+
+    // Keep the shell translucent; give editing tools their own readable backing.
+    out property <length> timeline-left: editing.x;
+    out property <length> timeline-top: editing.y + editor-row.y + timeline.y;
+    out property <length> timeline-width: timeline.width;
+    out property <length> volume-left: editing.x + editor-row.x + transport.x + volume-group.x + volume-track.x;
+    out property <length> volume-top: editing.y + editor-row.y + transport.y + volume-group.y + volume-track.y;
+    out property <length> volume-width: volume-track.width;
+    out property <bool> editor-visible: editing.visible;
+    out property <bool> import-visible: welcome.visible;
+
+    workspace := FocusScope {
+        enabled: !root.show-export-modal && !root.show-settings;
+        // Slider arrow keys stay local; rejected shortcuts bubble here so
+        // playback and trimming still work after interacting with a control.
+        key-pressed(event) => {
+            root.is-ctrl-held = event.modifiers.control;
+            if event.modifiers.control && (event.text == "z" || event.text == "Z") { root.undo-edit(false); return accept; }
+            if event.modifiers.control && (event.text == "y" || event.text == "Y") { root.undo-edit(true); return accept; }
+            if root.show-context && event.text == Key.Escape {root.show-context=false;return accept;}
+            if root.crop-mode {if event.text == Key.Escape {root.end-crop();return accept;}return reject;}
+            if !root.has-video { return reject; }
+            if event.text == "s" || event.text == "S" { root.split-clip(); return accept; }
+            if event.text == Key.Delete { root.remove-clip(); return accept; }
+            if event.text == " " { root.toggle-play(); return accept; }
+            if event.text == Key.LeftArrow { root.step-frame(-1); return accept; }
+            if event.text == Key.RightArrow { root.step-frame(1); return accept; }
+            if event.text == "i" || event.text == "I" { root.set-in-to-playhead(); return accept; }
+            if event.text == "o" || event.text == "O" { root.set-out-to-playhead(); return accept; }
+            if event.text == "r" || event.text == "R" { root.reset-trim(); return accept; }
+            return reject;
+        }
+        key-released(event) => { root.is-ctrl-held = event.modifiers.control; return reject; }
+        shell := Rectangle {
+            width: root.width; height: root.height;
+            border-radius: root.maximized ? 0px : 8px;
+            background: @linear-gradient(135deg, Theme.surface.with-alpha(1 - root.transparency / 100), Theme.base.with-alpha(1 - root.transparency / 100) 55%, Theme.end.with-alpha(1 - root.transparency / 100));
+            animate background { duration: 180ms; }
+            border-width: 1px; border-color: Theme.rim.with-alpha(105 / 255);
+            Rectangle {
+                x: 12px; y: 1px; width: parent.width - 24px; height: 1px;
+                background: @linear-gradient(90deg, #ffffff00, Theme.sheen.with-alpha(180 / 255), #ffffff00);
+            }
+            Rectangle {
+                x: 0px; y: 0px; height: 48px; width: parent.width;
+                TouchArea {
+                    width: parent.width - 138px;
+                    pointer-event(event) => { if event.kind == PointerEventKind.down && event.button == PointerEventButton.left { root.window-command(3); } }
+                    double-clicked => { root.window-command(1); }
+                }
+                Image { x: 20px; y: 10px; width: 28px; height: 28px; source: @image-url("../assets/feather.png"); image-fit: contain; }
+                Text { x: 60px; height: parent.height; text: "Feathercut"; color: Theme.ink; font-size: 15px; vertical-alignment: center; }
+                
+                for cmd in [0, 1, 2] : CaptionButton {
+                    x: parent.width - (3 - cmd) * 46px; y: 2px;
+                    command: cmd; maximized: root.maximized; clicked => { root.window-command(cmd); }
+                }
+            }
+
+            welcome := FocusScope {
+                x: 24px; y: 64px; width: parent.width - 48px; height: parent.height - 112px;
+                opacity: root.has-video ? 0 : 1;
+                visible: self.opacity > 0; enabled: !root.has-video;
+                animate opacity { duration: 160ms; }
+                Rectangle {
+                    width: parent.width; height: parent.height; border-radius: 12px;
+                    background: @linear-gradient(135deg, Theme.surface.with-alpha(100 / 255), Theme.panel.with-alpha(160 / 255), Theme.surface.with-alpha(115 / 255));
+                    border-width: root.drop-hovered ? 2px : 0px; border-color: Theme.rim;
+                    animate border-color { duration: 140ms; }
+                    Rectangle {
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        width: Math.min(520px, parent.width - 48px); height: 340px;
+                        VerticalLayout {
+                            spacing: 16px; alignment: center;
+                            Rectangle {
+                                height: 76px;
+                                Image { x: (parent.width - self.width) / 2; width: 64px; height: 72px; source: @image-url("../assets/feather.png"); image-fit: contain; }
+                            }
+                            Heading { height: 44px; text: "Light as a feather"; font-size: 34px; horizontal-alignment: center; }
+                            Text { height: 24px; text: root.is-loading ? "Opening your video…" : (root.drop-hovered ? "Release to open your video" : "Drop a video here. Keep the part that matters."); color: Theme.muted; font-size: 15px; horizontal-alignment: center; }
+                            Rectangle {
+                                height: 48px;
+                                Action { x: (parent.width - self.width) / 2; width: 176px; height: 48px; primary: true; text: root.is-loading ? "Opening…" : "Choose video"; icon-path: "M 1 3 L 6 3 L 8 5 L 16 5 L 16 15 L 1 15 Z"; enabled: !root.is-loading; clicked => { root.choose-file(); keys.focus(); } }
+                            }
+                            Label { height: 20px; text: "MP4 · MOV · MKV · WebM"; horizontal-alignment: center; }
+                        }
+                    }
+                    if root.is-loading : Rectangle { y: parent.height - 3px; width: parent.width; height: 3px; background: Theme.accent; }
+                }
+            }
+
+            editing := FocusScope {
+                x: 24px; y: 64px; width: parent.width - 48px; height: parent.height - 112px;
+                opacity: root.has-video ? 1 : 0;
+                visible: self.opacity > 0; enabled: root.has-video;
+                animate opacity { duration: 160ms; }
+                VerticalLayout {
+                    spacing: 16px;
+                    Rectangle {
+                        height: 32px; vertical-stretch: 0;
+                        HorizontalLayout {
+                            spacing: 16px;
+                            Text { text: root.file-name; color: Theme.ink; font-size: 14px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            Label { text: root.video-info-str; }
+                            Action { width: 32px; height: 32px; quiet: true; label: "Undo · Ctrl+Z"; icon-path: "M 6 2 L 1 7 L 6 12 M 1 7 L 11 7 Q 16 7 16 15"; enabled: root.can-undo; clicked => { root.undo-edit(false); keys.focus(); } }
+                            Action { width: 32px; height: 32px; quiet: true; label: "Redo · Ctrl+Y"; icon-path: "M 11 2 L 16 7 L 11 12 M 16 7 L 6 7 Q 1 7 1 15"; enabled: root.can-redo; clicked => { root.undo-edit(true); keys.focus(); } }
+                            Action { width: 90px; height: 32px; text: root.sequence-mode ? "Add clips" : "Open video"; enabled: !root.is-loading; clicked => { root.choose-file(); keys.focus(); } }
+                            if root.sequence-mode : Action { width: 90px; height: 32px; text: "Add audio"; enabled: !root.is-loading; clicked => { root.add-audio(); keys.focus(); } }
+                            Action { width: 90px; height: 32px; text: root.advanced-editor ? "Simple" : "Advanced"; explanation: root.advanced-editor ? "Trim the selected clip in simple mode" : "Open the layered timeline editor"; selected: root.advanced-editor; enabled: !root.is-loading && !root.crop-mode; clicked => { root.advanced-editor=!root.advanced-editor; keys.focus(); } }
+                            Action { width: 32px; height: 32px; quiet: true; label: "Close timeline"; icon-path: "M 4 4 L 13 13 M 4 13 L 13 4"; enabled: !root.is-loading; clicked => { root.clear-file(); keys.focus(); } }
+                        }
+                    }
+                    editor-row := HorizontalLayout {
+                        spacing: 16px;
+                        VerticalLayout {
+                            spacing: 16px; horizontal-stretch: 1;
+                            preview := Rectangle {
+                                vertical-stretch: 1; min-height: 160px; border-radius: 8px; clip: true;
+                                background: Theme.preview;
+                                video-canvas := Rectangle {
+                                    property <float> aspect: root.crop-mode ? root.source-width/Math.max(1,root.source-height) : Math.max(0.001,root.canvas-aspect);
+                                    width:Math.min(parent.width,parent.height*self.aspect);height:self.width/self.aspect;
+                                    x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;background:#000000;
+                                    Image {width:parent.width;height:parent.height;source:root.video-frame;image-fit:contain;}
+                                }
+                                Rectangle {
+                                    width: parent.width; height: parent.height; border-radius: 8px;
+                                    opacity: root.drop-hovered ? 1 : 0; visible: self.opacity > 0;
+                                    animate opacity { duration: 140ms; }
+                                    border-width: 2px; border-color: Theme.rim; background: Theme.preview.with-alpha(215 / 255);
+                                    Text { text: "Release to add clips to your timeline"; color: Theme.ink; font-size: 18px; horizontal-alignment: center; vertical-alignment: center; }
+                                }
+                                if root.crop-mode : CropOverlay {
+                                    width: parent.width; height: parent.height; source-width: root.source-width; source-height: root.source-height;
+                                    crop-x <=> root.crop-x; crop-y <=> root.crop-y; crop-w <=> root.crop-w; crop-h <=> root.crop-h;
+                                    aspect: root.crop-aspect; bypass-snap: root.is-ctrl-held;
+                                    committed => { root.crop-commit(); }
+                                }
+                                if root.is-loading : Rectangle { y: parent.height - 3px; height: 3px; width: parent.width; background: Theme.accent; }
+                            }
+                            timeline := Rectangle {
+                                height: root.sequence-mode ? Math.min(250px,Math.max(200px,root.video-layers*64px+root.audio-layers*44px+88px)) : 92px; vertical-stretch: 0;
+                                if root.sequence-mode : ClipWorkspace {
+                                    gesture(active)=>{root.timeline-busy=active;}
+                                    enabled: !root.crop-mode;
+                                    width: parent.width; height: parent.height;
+                                    videos: root.video-clips; audio: root.audio-clips; video-layers: root.video-layers; audio-layers: root.audio-layers;
+                                    selected: root.selected-clip; selected-audio: root.selected-audio; duration: root.duration-secs; position: root.current-time-secs;
+                                    span <=> root.view-span; offset <=> root.view-start; scrubbing <=> root.is-scrubbing; ctrl: root.is-ctrl-held;
+                                    seek(time) => { if root.is-playing {root.toggle-play();}root.seek(time); }
+                                    select(id,audio) => { root.select-clip(id,audio); }
+                                    move(id,audio,time,layer) => { root.move-clip(id,audio,time,layer); keys.focus(); }
+                                    trim(out,delta) => { root.trim-clip(out,delta); }
+                                    split => {root.split-clip();keys.focus();}
+                                    remove => {root.remove-clip();keys.focus();}
+                                    add-layer(audio) => {root.add-layer(audio);keys.focus();}
+                                    context(id,audio,x,y) => {root.context-x=x;root.context-y=y;root.show-context=true;}
+                                }
+                                if !root.sequence-mode : SimpleTrimBar {
+                                    width: parent.width; height: parent.height; thumbnails: root.thumbnails;
+                                    duration: root.duration-secs; position: root.current-time-secs; input <=> root.in-point-secs; output <=> root.out-point-secs; fps:root.source-fps;
+                                    pause=>{if root.is-playing{root.toggle-play();}}
+                                    in-text: root.in-time-text; out-text: root.out-time-text; end-text: root.end-time-text; scrubbing <=> root.is-scrubbing;
+                                    seek(time)=>{if root.is-playing{root.toggle-play();}root.seek(time);}
+                                    change-in(time)=>{root.update-in-point(time);}
+                                    change-out(time)=>{root.update-out-point(time);}
+                                }
+                            }
+
+                            transport := Rectangle {
+                                height: 56px; vertical-stretch: 0;
+                                border-radius: 8px; background: Theme.panel.with-alpha(210 / 255);
+                                HorizontalLayout {
+                                    spacing: 8px; padding-left: 8px; padding-right: 8px; padding-top: 6px; padding-bottom: 6px;
+                                    Action { enabled:!root.crop-mode; width: 36px; height: 40px; quiet: true; label: "Previous frame · Left arrow"; icon-path: "M 3 3 L 3 14 M 13 3 L 5 8 L 13 14 Z"; clicked => { root.step-frame(-1); keys.focus(); } }
+                                    Action {
+                                        enabled:!root.crop-mode; width: 44px; height: 44px; border-radius: 22px; primary: true;
+                                        icon-path: root.is-playing ? "M 5 3 L 5 14 M 11 3 L 11 14" : "M 4 2 L 14 8 L 4 14 Z";
+                                        label: root.is-playing ? "Pause · Space" : "Play · Space"; fill-icon: !root.is-playing;
+                                        clicked => { root.toggle-play(); keys.focus(); }
+                                    }
+                                    Action { enabled:!root.crop-mode; width: 36px; height: 40px; quiet: true; label: "Next frame · Right arrow"; icon-path: "M 13 3 L 13 14 M 3 3 L 11 8 L 3 14 Z"; clicked => { root.step-frame(1); keys.focus(); } }
+                                    VerticalLayout {
+                                        alignment: center; spacing: 2px;
+                                        Text { text: root.timecode-display; font-family: "Consolas"; font-size: 13px; color: Theme.ink; }
+                                        Label { text: root.is-playing ? "Playing" : "Paused · Space to play"; font-size: 11px; }
+                                    }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    volume-group := Rectangle {
+                                        width: 136px;
+                                        HorizontalLayout {
+                                            spacing: 8px;
+                                            Action {
+                                                width: 28px; height: 32px; quiet: true;
+                                                label: root.volume > 0 ? "Mute audio" : "Unmute audio";
+                                                icon-path: root.volume > 0 ? "M 1 6 L 4 6 L 8 2 L 8 15 L 4 11 L 1 11 Z M 11 5 Q 15 8 11 12" : "M 1 6 L 4 6 L 8 2 L 8 15 L 4 11 L 1 11 Z M 11 6 L 16 11 M 16 6 L 11 11";
+                                                clicked => { root.set-volume(root.volume > 0 ? 0 : 80); keys.focus(); }
+                                            }
+                                            volume-track := AmountSlider {
+                                                value <=> root.volume; label: "Playback volume";
+                                                changed => { root.set-volume(self.value); }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: 232px; horizontal-stretch: 0; border-radius: 12px;
+                            background: Theme.panel.with-alpha(210 / 255);
+                            VerticalLayout {
+                                padding: 16px; spacing: 12px;
+                    Text { text: root.crop-mode ? "Crop frame" : (root.sequence-mode ? (root.selected-audio ? "Audio clip" : "Video clip") : "Trim selection"); font-size: 16px; font-weight: 600; color: Theme.ink; height: 24px; }
+                                if root.sequence-mode && root.selected-name != "" : Label {text:root.selected-name;overflow:elide;height:16px;font-size:11px;}
+                                ScrollView {
+                                VerticalLayout { spacing: 12px; padding-right: 4px;
+                                if !root.sequence-mode && !root.crop-mode : VerticalLayout {
+                                    spacing: 8px;
+                                    TimeField { label: "In"; value: root.in-time-text; edited(text) => {root.edit-trim(false,text);} step(delta)=>{root.step-trim(false,delta);} }
+                                    TimeField { label: "Out"; value: root.out-time-text; edited(text)=>{root.edit-trim(true,text);} step(delta)=>{root.step-trim(true,delta);} }
+                                    HorizontalLayout {spacing:8px;Action{text:"Set in";shortcut:"I";explanation:"Set start to playhead";clicked=>{root.set-in-to-playhead();keys.focus();}}Action{text:"Set out";shortcut:"O";explanation:"Set end to playhead";clicked=>{root.set-out-to-playhead();keys.focus();}}}
+                                    Action {text:"Reset selection";shortcut:"R";quiet:true;clicked=>{root.reset-trim();keys.focus();}}
+                                }
+                                if root.sequence-mode && !root.crop-mode : VerticalLayout {
+                                    spacing:8px;
+                                    Label {text:"Layer";}
+                                    Select {explanation:"Choose the selected clip’s layer";options:root.layer-names; index <=> root.selected-layer; changed=>{root.move-selected-layer(self.index);}}
+                                    Label {text:"Drag to position or trim.\nRight-click for clip actions.";wrap:word-wrap;height:40px;}
+                                }
+                                if !root.crop-mode : VerticalLayout {
+                                    spacing:8px;
+                                    Label {text:root.sequence-mode ? "Clip length" : "Selected duration";height:20px;}
+                                    Text {text:root.selection-duration-text;color:Theme.ink;font-size:20px;height:28px;}
+                                    if !root.selected-audio : Action {text:"Crop frame";explanation:"Crop with handles or an exact resolution";icon-path:"M 4 0 L 4 13 L 17 13 M 0 4 L 13 4 L 13 17";clicked=>{root.begin-crop();}}
+                                }
+                                if root.crop-mode : VerticalLayout {
+                                    spacing:8px;
+                                    Label {text:"Drag corners to resize.\nDrag inside to reposition.";wrap:word-wrap;height:40px;}
+                                    Select {explanation:"Choose a crop aspect ratio";options:["Free · ratio snapping","16:9","9:16","1:1","4:3","3:2"];index <=> root.crop-aspect;changed=>{root.crop-ratio(self.index);}}
+                                    Label {text:"Hold Ctrl for free cropping.";height:22px;font-size:11px;}
+                                    HorizontalLayout {spacing:8px;
+                                        Glass {height:38px;TextInput{x:8px;width:parent.width - 16px;height:parent.height;text <=> root.crop-width-text;single-line:true;color:Theme.ink;accepted=>{root.crop-dimension(true,self.text);}}}
+                                        Label {text:"×";}
+                                        Glass {height:38px;TextInput{x:8px;width:parent.width - 16px;height:parent.height;text <=> root.crop-height-text;single-line:true;color:Theme.ink;accepted=>{root.crop-dimension(false,self.text);}}}
+                                    }
+                                    Label {text:Math.round(root.crop-w*root.source-width)+" × "+Math.round(root.crop-h*root.source-height)+" pixels";height:24px;}
+                                    Action {text:"Reset crop";quiet:true;clicked=>{root.reset-crop();}}
+                                    Action {text:"Done cropping";primary:true;clicked=>{root.end-crop();keys.focus();}}
+                                }
+                                if !root.crop-mode && root.selected-has-audio : VerticalLayout {
+                                    spacing:8px;
+                                    HorizontalLayout {Label{text:"Clip audio";horizontal-stretch:1;}Label{text:Math.round(root.clip-gain)+"%";}}
+                                    AmountSlider {label:"Clip audio volume";value <=> root.clip-gain;changed=>{root.change-clip-gain(self.value);}}
+                                    Action {text:root.selected-muted ? "Unmute clip" : "Mute clip";clicked=>{root.mute-clip();keys.focus();}}
+                                }
+                                Rectangle {vertical-stretch:1;}
+                                }
+                                }
+                                Action { enabled: !root.crop-mode; height: 44px; text: root.sequence-mode ? "Export timeline" : "Export cut"; primary: true; icon-path: "M 1 7 L 1 16 L 16 16 L 16 7 M 8 12 L 8 1 M 4 5 L 8 1 L 12 5"; clicked => { root.open-export-modal(); } }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalLayout {
+                x: 24px; y: parent.height - 40px; width: parent.width - 48px; height: 32px; spacing: 16px;
+                Label { text: root.status-message; overflow: elide; font-size: 11px; horizontal-stretch: 1; }
+                if !root.has-video && root.can-undo : Action { text: "Undo remove"; quiet: true; clicked => { root.undo-edit(false); keys.focus(); } }
+                Action {
+                    width: 32px; height: 32px; quiet: true; label: "Settings";
+                    icon-path: "M 6.8 .8 L 10.2 .8 L 10.7 3.1 L 12.1 3.9 L 14.3 3.3 L 16 6.2 L 14.3 7.8 L 14.3 9.2 L 16 10.8 L 14.3 13.7 L 12.1 13.1 L 10.7 13.9 L 10.2 16.2 L 6.8 16.2 L 6.3 13.9 L 4.9 13.1 L 2.7 13.7 L 1 10.8 L 2.7 9.2 L 2.7 7.8 L 1 6.2 L 2.7 3.3 L 4.9 3.9 L 6.3 3.1 Z M 11.5 8.5 A 3 3 0 1 1 5.5 8.5 A 3 3 0 1 1 11.5 8.5";
+                    clicked => { root.show-settings = true; }
+                }
+            }
+        }
+    }
+    settings-layer := Rectangle {
+        opacity: root.show-settings ? 1 : 0;
+        visible: root.show-settings || self.opacity > 0;
+        animate opacity { duration: 150ms; }
+        width: parent.width; height: parent.height; background: Theme.scrim.with-alpha(102 / 255);
+        TouchArea { enabled: root.show-settings; clicked => { } }
+        settings-focus := FocusScope {
+            enabled: root.show-settings;
+            changed enabled => { if self.enabled { self.focus(); } }
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.show-settings = false; return accept; }
+                return reject;
+            }
+            Glass {
+                x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + (1 - settings-layer.opacity) * 8px;
+                width: 440px; height: 465px;
+                border-radius: 16px; border-color: Theme.rim.with-alpha(168 / 255);
+                background: @linear-gradient(140deg, Theme.settings, Theme.modal-low);
+                drop-shadow-blur: 35px; drop-shadow-color: Theme.scrim.with-alpha(136 / 255);
+                VerticalLayout {
+                    padding: 24px; spacing: 16px;
+                    Text { text: "Settings"; color: Theme.ink; font-size: 22px; font-weight: 600; height: 32px; }
+                    Label { text: "Appearance"; height: 18px; }
+                    VerticalLayout {
+                        spacing: 8px;
+                        Label { text: "Theme"; }
+                        Choice { explanations:["Use the lilac theme","Use the neutral monochrome theme"];options: ["Lilac", "Monochrome"]; index <=> root.theme-idx; changed => { root.appearance-changed(); } }
+                    }
+                    VerticalLayout {
+                        spacing: 5px;
+                        HorizontalLayout {
+                            Text { text: "Transparency"; color: Theme.ink; horizontal-stretch: 1; }
+                            Label { text: Math.round(root.transparency) + "%"; }
+                        }
+                        AmountSlider { label: "Transparency"; value <=> root.transparency; changed => { root.appearance-changed(); } }
+                        HorizontalLayout { Label { text: "Solid"; } Rectangle { horizontal-stretch: 1; } Label { text: "Clear"; } }
+                    }
+                    VerticalLayout {
+                        spacing: 5px;
+                        HorizontalLayout {
+                            Text { text: "Background blur"; color: Theme.ink; horizontal-stretch: 1; }
+                            Label { text: Math.round(root.blur-amount) + "%"; }
+                        }
+                        AmountSlider { label: "Background blur"; value <=> root.blur-amount; enabled: root.transparency > 0; changed => { root.appearance-changed(); } }
+                        HorizontalLayout { Label { text: "None"; } Rectangle { horizontal-stretch: 1; } Label { text: "Soft"; } }
+                    }
+                    Label {
+                        height: 32px; wrap: word-wrap;
+                        text: root.transparency <= 0 ? "Solid background. Appearance is saved automatically." : (root.blur-amount > 0 && !root.backdrop-available ? "Desktop blur is unavailable here. Transparency remains adjustable." : "Video and text stay opaque. Appearance is saved automatically.");
+                    }
+                    Action { height: 38px; text: "Done"; primary: true; clicked => { root.show-settings = false; } }
+                }
+            }
+        }
+    }
+
+    // Modal input shield and focus scope keep editor shortcuts out of export.
+    modal-layer := Rectangle {
+        width: parent.width; height: parent.height; background: Theme.scrim.with-alpha(119 / 255);
+        opacity: root.show-export-modal ? 1 : 0;
+        visible: root.show-export-modal || self.opacity > 0;
+        animate opacity { duration: 150ms; }
+        TouchArea { enabled: root.show-export-modal; clicked => { } }
+        modal-focus := FocusScope {
+            enabled: root.show-export-modal;
+            visible: root.show-export-modal || modal-layer.opacity > 0;
+            changed enabled => { if self.enabled { self.focus(); } }
+            key-pressed(event) => {
+                if event.text == Key.Escape { root.close-export-modal(); return accept; }
+                return reject;
+            }
+            Glass {
+                x: (root.width - self.width) / 2; y: (root.height - self.height) / 2 + (1 - modal-layer.opacity) * 8px;
+                width: 418px; height: Math.min(root.height - 40px, 826px);
+                border-radius: 16px; border-color: Theme.rim.with-alpha(168 / 255);
+                background: @linear-gradient(140deg, Theme.modal.with-alpha(238 / 255), Theme.modal-low.with-alpha(245 / 255) 55%, Theme.modal-end.with-alpha(241 / 255));
+                drop-shadow-blur: 42px; drop-shadow-offset-y: 12px; drop-shadow-color: Theme.scrim.with-alpha(158 / 255);
+                VerticalLayout {
+                    padding: 22px; spacing: 13px;
+                    HorizontalLayout {
+                        height: 30px; vertical-stretch: 0;
+                        Heading { text: "Export cut"; font-size: 25px; }
+                        Rectangle { horizontal-stretch: 1; }
+                        Action { width: 30px; height: 28px; text: "×";label:"Close export panel"; quiet: true; clicked => { root.close-export-modal(); } }
+                    }
+                    Label { text: root.export-summary == "" ? root.file-name + " · " + root.selection-duration-text : root.export-summary; overflow: elide; height: 16px; vertical-stretch: 0; }
+                    Choice {explanations:["Encode under a maximum file size","Preserve decoded frames in MKV","Copy compressed streams at keyframes"]; options: ["Target size", "Lossless", "Fast copy"]; index <=> root.export-mode-idx; enabled: !root.is-exporting; vertical-stretch: 0; }
+                    ScrollView {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 12px; padding-right: 4px;
+                            if root.export-mode-idx == 0 : VerticalLayout {
+                                spacing: 10px;
+                                Glass {
+                                    height: 75px; border-radius: 9px;
+                                    HorizontalLayout {
+                                        padding-left: 22px; padding-right: 10px; spacing: 12px;
+                                        TextInput {
+                                            text <=> root.target-size-str; enabled: !root.is-exporting; color: Theme.ink;
+                                            font-family: "Consolas"; font-size: 44px; single-line: true; vertical-alignment: center;
+                                            selection-background-color: Theme.selection; selection-foreground-color: white;
+                                            edited => { root.target-size-edited(self.text); }
+                                        }
+                                        Rectangle { width: 1px; height: 48px; background: Theme.line; }
+                                        Label { text: "MiB"; color: Theme.ink; font-size: 18px; width: 34px; }
+                                        VerticalLayout {
+                                            width: 26px; spacing: 0px; alignment: center;
+                                            Action { min-width: 24px; icon-path: "M 3 10 L 8 5 L 13 10"; height: 25px; quiet: true;label:"Increase target size by 1 MiB"; enabled: !root.is-exporting; clicked => { root.set-target-size(root.target-size-mb + 1); } }
+                                            Action { min-width: 24px; icon-path: "M 3 5 L 8 10 L 13 5"; height: 25px; quiet: true;label:"Decrease target size by 1 MiB"; enabled: !root.is-exporting; clicked => { root.set-target-size(root.target-size-mb - 1); } }
+                                        }
+                                    }
+                                }
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    for size in [8.0, 10.0, 25.0, 50.0, 100.0] : Action {
+                                        height: 34px; text: size + " MiB";explanation:"Set maximum file size to "+size+" MiB"; selected: root.target-size-mb == size; enabled: !root.is-exporting;
+                                        clicked => { root.set-target-size(size); }
+                                    }
+                                }
+                                Label { text: "Video  ≈ " + root.estimated-bitrate-str + "\nAudio  128 kbps AAC"; height: 40px; }
+                                Rectangle { height: 1px; background: Theme.line; }
+                                Text { text: "Codec"; color: Theme.ink; height: 18px; }
+                                VerticalLayout {
+                                    spacing: 5px;
+                                    for codec[idx] in ["H.265 10-bit (NVEnc)", "H.265 10-bit (x265)", "H.264 (NVEnc)", "H.264 (x264 · CPU)"] : Glass {
+                                        height: 34px; border-radius: 7px;
+                                        border-color: root.codec-idx == idx ? Theme.rim.with-alpha(102 / 255) : Theme.line;
+                                        HorizontalLayout {
+                                            padding-left: 12px; spacing: 12px;
+                                            Rectangle {
+                                                width: 19px;
+                                                Rectangle {
+                                                y: (parent.height - self.height) / 2; width: 19px; height: 19px; border-radius: 10px; border-width: 1px; border-color: Theme.rim;
+                                                background: root.codec-idx == idx ? Theme.selected : transparent;
+                                                if root.codec-idx == idx : Rectangle { x: 5px; y: 5px; width: 9px; height: 9px; border-radius: 5px; background: Theme.monochrome ? Theme.selected-ink : Theme.knob; }
+                                                }
+                                            }
+                                            Label { text: codec; color: Theme.ink; horizontal-stretch: 1; }
+                                        }
+                                        Action { width: parent.width; height: parent.height; quiet: true; label: codec; enabled: !root.is-exporting; clicked => { root.codec-idx = idx; } }
+                                    }
+                                }
+                                Text { text: "Framerate"; color: Theme.ink; height: 18px; }
+                                Select { options: ["Constant · Source FPS", "Constant · 24 fps", "Constant · 30 fps", "Constant · 60 fps"]; index <=> root.fps-idx; enabled: !root.is-exporting; }
+                                Text { text: "Preset"; color: Theme.ink; height: 18px; }
+                                Choice {explanations:["Encode faster","Balance encoding speed and quality","Spend more time on encoding quality"]; options: ["Fast", "Balanced", "Quality"]; index <=> root.preset-idx; enabled: !root.is-exporting; }
+                            }
+                            if root.export-mode-idx == 1 : VerticalLayout {
+                                spacing: 16px;
+                                Text { text: "Every frame, preserved."; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                                Label { text: "Exact trim boundaries with lossless FFV1 video and PCM audio in an MKV file.\n\nEdited timelines use the first clip's resolution and frame rate. Lossless files can be much larger than the source. The target size does not apply."; wrap: word-wrap; }
+                            }
+                            if root.export-mode-idx == 2 : VerticalLayout {
+                                spacing: 16px;
+                                Text { text: "Stream copy"; color: Theme.ink; font-size: 18px; font-weight: 600; }
+                                Label { text: root.can-fast-copy ? "Copy the original video and audio without re-encoding. Cut boundaries align to source keyframes." : "Fast copy is available for one clip with its original linked audio. Choose Target size or Lossless to export reordered clips or edited audio."; wrap: word-wrap; }
+                                Label { text: root.copy-range-summary; wrap: word-wrap; }
+                                Action { text: "Use keyframe-aligned selection"; enabled: !root.is-exporting && root.keyframes-ready; clicked => { root.snap-copy-range(); } }
+                            }
+                            Rectangle { vertical-stretch: 1; }
+                        }
+                    }
+                    Rectangle { height: 1px; vertical-stretch: 0; background: Theme.line; }
+                    Label {
+                        height: 34px; vertical-stretch: 0; wrap: word-wrap;
+                        text: root.export-status-text == "" ? "Your selected range: " + root.trim-summary-str : root.export-status-text;
+                    }
+                    HorizontalLayout {
+                        height: 44px; vertical-stretch: 0; spacing: 12px;
+                        Action { width: 118px; height: 44px; text: root.is-exporting ? "Cancel export" : "Cancel"; clicked => { root.close-export-modal(); } }
+                        Action { height: 44px; primary: true; text: root.is-exporting ? "Exporting…" : "Start export"; icon-path: "M 1 7 L 1 16 L 16 16 L 16 7 M 8 12 L 8 1 M 4 5 L 8 1 L 12 5"; enabled: !root.is-exporting && (root.export-mode-idx != 2 || root.can-fast-copy); clicked => { root.start-export(); } }
+                    }
+                }
+            }
+        }
+    }
+    if root.show-context : Rectangle {
+        width:parent.width;height:parent.height;
+        TouchArea {clicked=>{root.show-context=false;}}
+        Glass {
+            x:Math.max(8px,Math.min(root.context-x,parent.width - 212px));y:Math.max(44px,Math.min(root.context-y,parent.height - 184px));width:204px;height:176px;background:Theme.popup;
+            VerticalLayout {padding:6px;spacing:4px;
+                Action {text:"Detach audio";explanation:"Move linked sound to an audio layer";enabled:root.selected-has-audio&&root.selected-linked;clicked=>{root.show-context=false;root.detach-audio();}}
+                Action {text:"Split at playhead";shortcut:"S";clicked=>{root.show-context=false;root.split-clip();}}
+                Action {text:"Crop frame";enabled:!root.selected-audio;clicked=>{root.show-context=false;root.begin-crop();}}
+                Action {text:"Remove clip";clicked=>{root.show-context=false;root.remove-clip();}}
+            }
+        }
+    }
+    if HoverHint.text != "" : Rectangle {
+        width:Math.min(340px,hint.preferred-width+20px);height:30px;
+        x:Math.max(8px,Math.min(HoverHint.x,parent.width - self.width - 8px));y:Math.max(46px,Math.min(HoverHint.y - 34px,parent.height - 38px));
+        border-radius:5px;background:Theme.popup;border-width:1px;border-color:Theme.line;
+        hint:=Text {x:10px;width:parent.width - 20px;height:parent.height;text:HoverHint.text;color:Theme.ink;font-size:11px;vertical-alignment:center;overflow:elide;}
+    }
+    // Native drag-resize hit targets are kept outside the content and overlay.
+    for edge[idx] in [0, 1, 2, 3, 4, 5, 6, 7] : TouchArea {
+        enabled: !root.maximized;
+        x: idx == 1 || idx == 3 || idx == 5 ? root.width - 5px : (idx == 6 || idx == 7 ? 8px : 0px);
+        y: idx == 2 || idx == 3 || idx == 7 ? root.height - 5px : (idx == 4 || idx == 5 ? 8px : 0px);
+        width: idx == 6 || idx == 7 ? root.width - 16px : 5px;
+        height: idx == 4 || idx == 5 ? root.height - 16px : 5px;
+        mouse-cursor: idx == 4 || idx == 5 ? ew-resize : (idx == 6 || idx == 7 ? ns-resize : (idx == 0 || idx == 3 ? nwse-resize : nesw-resize));
+        pointer-event(event) => { if event.kind == PointerEventKind.down && event.button == PointerEventButton.left { root.resize-window(edge); } }
+    }
+}
+

@@ -1,0 +1,39 @@
+[package]
+name = "feathercut"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[features]
+testing-ui = []
+
+[[bin]]
+name = "feathercut"
+path = "src/main.rs"
+
+[[bin]]
+name = "feathercut-testing"
+path = "src/main.rs"
+required-features = ["testing-ui"]
+test = false
+
+[dependencies]
+libloading = "0.8.9"
+raw-window-handle = "0.6.2"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+slint = { version = "1.16.1", features = ["unstable-winit-030", "software-renderer-path"] }
+
+[build-dependencies]
+slint-build = "1.16.1"
+
+[dev-dependencies]
+png = "0.18.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.61.2"
+windows-collections = "0.2.0"
+windows-numerics = "0.2.0"
+windows = { version = "0.61.3", features = ["Foundation", "Foundation_Collections", "Graphics_Effects", "System", "UI_Composition", "UI_Composition_Desktop", "Win32_Foundation", "Win32_Graphics_Direct2D", "Win32_System_WinRT", "Win32_System_WinRT_Composition", "Win32_System_WinRT_Graphics_Direct2D"] }
+

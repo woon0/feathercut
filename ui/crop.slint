@@ -1,0 +1,81 @@
+import { Theme } from "glass.slint";
+
+export component CropOverlay inherits Rectangle {
+    in property <float> source-width: 1920;
+    in property <float> source-height: 1080;
+    in-out property <float> crop-x: 0;
+    in-out property <float> crop-y: 0;
+    in-out property <float> crop-w: 1;
+    in-out property <float> crop-h: 1;
+    in property <int> aspect: 0;
+    in property <bool> bypass-snap;
+    callback committed();
+    property <float> ratio: root.source-width / Math.max(1,root.source-height);
+    property <length> image-width: Math.min(root.width,root.height * root.ratio);
+    property <length> image-height: root.image-width / root.ratio;
+    property <length> image-x: (root.width - root.image-width)/2;
+    property <length> image-y: (root.height - root.image-height)/2;
+    property <float> desired-ratio: root.aspect == 1 ? 16/9 : (root.aspect == 2 ? 9/16 : (root.aspect == 3 ? 1 : (root.aspect == 4 ? 4/3 : 3/2)));
+    Rectangle { x: root.image-x; y: root.image-y; width: root.image-width; height: root.crop-y * root.image-height; background: #000000a0; }
+    Rectangle { x: root.image-x; y: root.image-y+(root.crop-y+root.crop-h)*root.image-height; width: root.image-width; height: (1 - root.crop-y - root.crop-h)*root.image-height; background: #000000a0; }
+    Rectangle { x: root.image-x; y: root.image-y+root.crop-y*root.image-height; width: root.crop-x*root.image-width; height: root.crop-h*root.image-height; background: #000000a0; }
+    Rectangle { x: root.image-x+(root.crop-x+root.crop-w)*root.image-width; y: root.image-y+root.crop-y*root.image-height; width: (1 - root.crop-x - root.crop-w)*root.image-width; height: root.crop-h*root.image-height; background: #000000a0; }
+    selection := Rectangle {
+        x: root.image-x+root.crop-x*root.image-width; y: root.image-y+root.crop-y*root.image-height;
+        width: root.crop-w*root.image-width; height: root.crop-h*root.image-height;
+        background: transparent; border-width: 1px; border-color: #ffffff;
+        for third in [1,2] : Rectangle { x: third/3*parent.width; width: 1px; height: parent.height; background: #ffffff40; }
+        for third in [1,2] : Rectangle { y: third/3*parent.height; height: 1px; width: parent.width; background: #ffffff40; }
+        property <length> press-x;
+        property <length> press-y;
+        property <float> initial-x;
+        property <float> initial-y;
+        TouchArea {
+            mouse-cursor: grab;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down { parent.press-x = self.absolute-position.x+self.mouse-x; parent.press-y = self.absolute-position.y+self.mouse-y; parent.initial-x=root.crop-x;parent.initial-y=root.crop-y; }
+                if event.kind == PointerEventKind.up { root.committed(); }
+            }
+            moved => { if self.pressed {root.crop-x=Math.max(0,Math.min(1 - root.crop-w,parent.initial-x+(self.absolute-position.x+self.mouse-x - parent.press-x)/root.image-width));root.crop-y=Math.max(0,Math.min(1 - root.crop-h,parent.initial-y+(self.absolute-position.y+self.mouse-y - parent.press-y)/root.image-height));} }
+        }
+    }
+    for corner in [0,1,2,3] : Rectangle {
+        property <bool> right: corner == 1 || corner == 3;
+        property <bool> bottom: corner >= 2;
+        x: Math.max(0px,Math.min(root.width - 12px,selection.x + (self.right ? selection.width : 0px) - 6px));
+        y: Math.max(0px,Math.min(root.height - 12px,selection.y + (self.bottom ? selection.height : 0px) - 6px));
+        width: 12px; height: 12px; border-radius: 3px; background: #ffffff; border-width: 1px; border-color: Theme.accent;
+        property <length> press-x;
+        property <length> press-y;
+        property <float> initial-x;
+        property <float> initial-y;
+        property <float> initial-w;
+        property <float> initial-h;
+        TouchArea {
+            mouse-cursor: corner == 0 || corner == 3 ? nwse-resize : nesw-resize;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {parent.press-x=self.absolute-position.x+self.mouse-x;parent.press-y=self.absolute-position.y+self.mouse-y;parent.initial-x=root.crop-x;parent.initial-y=root.crop-y;parent.initial-w=root.crop-w;parent.initial-h=root.crop-h;}
+                if event.kind == PointerEventKind.up {root.committed();}
+            }
+            moved => {
+                if self.pressed {
+                    let dx=(self.absolute-position.x+self.mouse-x - parent.press-x)/root.image-width;
+                    let dy=(self.absolute-position.y+self.mouse-y - parent.press-y)/root.image-height;
+                    let x=parent.right ? parent.initial-x : Math.max(0,Math.min(parent.initial-x+parent.initial-w - 0.02,parent.initial-x+dx));
+                    let y=parent.bottom ? parent.initial-y : Math.max(0,Math.min(parent.initial-y+parent.initial-h - 0.02,parent.initial-y+dy));
+                    let w=parent.right ? Math.max(0.02,Math.min(1-x,parent.initial-w+dx)) : parent.initial-x+parent.initial-w - x;
+                    let h=parent.bottom ? Math.max(0.02,Math.min(1-y,parent.initial-h+dy)) : parent.initial-y+parent.initial-h - y;
+                    let actual=w*root.ratio/h;
+                    let near= Math.abs(actual - 16/9)<0.06 ? 16/9 : (Math.abs(actual - 9/16)<0.06 ? 9/16 : (Math.abs(actual - 1)<0.06 ? 1 : (Math.abs(actual - 4/3)<0.06 ? 4/3 : (Math.abs(actual - 3/2)<0.06 ? 3/2 : 0))));
+                    let snap=root.bypass-snap ? 0 : (root.aspect > 0 ? root.desired-ratio : near);
+                    let available-height=parent.bottom ? 1 - parent.initial-y : parent.initial-y+parent.initial-h;
+                    let width=snap>0 ? Math.min(w,available-height*snap/root.ratio) : w;
+                    let height=snap>0 ? width*root.ratio/snap : h;
+                    root.crop-x=snap>0 ? (parent.right?parent.initial-x:parent.initial-x+parent.initial-w - width) : x;
+                    root.crop-y=snap>0 ? (parent.bottom?parent.initial-y:parent.initial-y+parent.initial-h - height) : y;
+                    root.crop-w=width;root.crop-h=height;
+                }
+            }
+        }
+    }
+}

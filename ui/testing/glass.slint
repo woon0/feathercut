@@ -1,0 +1,257 @@
+export global Theme {
+    in-out property <bool> monochrome: false;
+    out property <color> accent: monochrome ? #c7c7c7 : #b794eb;
+    out property <color> accent-strong: monochrome ? #999999 : #9148e8;
+    out property <color> base: monochrome ? #141414 : #241831;
+    out property <color> dark-ink: monochrome ? #333333 : #46315c;
+    out property <color> end: monochrome ? #2c2c2c : #493355;
+    out property <color> focus: monochrome ? #ffffff : #f1dfff;
+    out property <color> glow: monochrome ? #aaaaaa : #8e52ef;
+    out property <color> hover: monochrome ? #dddddd : #dbcbff;
+    out property <color> ink: monochrome ? #ffffff : #f5efff;
+    out property <color> knob: monochrome ? #ededed : #ead7ff;
+    out property <color> knob-rim: monochrome ? #999999 : #9974c5;
+    out property <color> line: monochrome ? #ffffff28 : #e0caff28;
+    out property <color> modal: monochrome ? #272727 : #514163;
+    out property <color> modal-end: monochrome ? #2b2b2b : #493158;
+    out property <color> modal-low: monochrome ? #202020 : #261c35;
+    out property <color> muted: monochrome ? #d2d2d2 : #d5c7e5;
+    out property <color> panel: monochrome ? #1b1b1b : #2a2036;
+    out property <color> plain: monochrome ? #aaaaaa : #a59bbb;
+    out property <color> popup: monochrome ? #252525 : #32233f;
+    out property <color> preview: monochrome ? #090909 : #090911;
+    out property <color> rim: monochrome ? #d8d8d8 : #bd98ff;
+    out property <color> scrim: monochrome ? #080808 : #080612;
+    out property <color> selected: monochrome ? #eeeeee : #9364de;
+    out property <color> selected-dark: monochrome ? #bcbcbc : #6944b4;
+    out property <color> selected-ink: monochrome ? #101010 : ink;
+    out property <color> selection: monochrome ? #777777 : #8256bc;
+    out property <color> settings: monochrome ? #282828 : #453455;
+    out property <color> sheen: monochrome ? #eeeeee : #eee5ff;
+    out property <color> soft: monochrome ? #b7b7b7 : #c5a8ef;
+    out property <color> surface: monochrome ? #292929 : #3c294f;
+    out property <color> field: monochrome ? #323232 : #3d2e4d;
+    out property <color> track: monochrome ? #aaaaaa : #b09ac1;
+}
+
+export component Glass inherits Rectangle {
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Theme.line;
+    background: Theme.field.with-alpha(235 / 255);
+    animate border-color { duration: 140ms; }
+    Rectangle {
+        x: root.border-radius; y: 1px; width: parent.width - root.border-radius * 2; height: 1px;
+        background: @linear-gradient(90deg, #ffffff00, Theme.sheen.with-alpha(70 / 255), #ffffff00);
+    }
+    @children
+}
+
+export component Action inherits Rectangle {
+    clip: true;
+    in property <string> text;
+    in property <string> label: root.text;
+    in property <string> shortcut: "";
+    in property <string> icon-path: "";
+    in property <bool> fill-icon: false;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <bool> enabled: true;
+    in property <bool> selected: false;
+    property <color> content-ink: root.primary || root.selected ? Theme.selected-ink : Theme.ink;
+    callback clicked();
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    forward-focus: focus;
+    height: 38px; min-width: 32px;
+    border-radius: 8px;
+    border-width: root.quiet && !touch.has-hover && !focus.has-focus ? 0px : 1px;
+    border-color: focus.has-focus ? Theme.focus : (root.primary || root.selected ? Theme.rim : Theme.line);
+    background: root.primary || root.selected ? (Theme.monochrome ? (touch.has-hover ? #eeeeee : #d9d9d9) : (touch.has-hover ? #a179d8 : #8d65c7)) : (touch.has-hover ? Theme.hover.with-alpha(32 / 255) : (root.quiet ? #ffffff00 : Theme.field.with-alpha(210 / 255)));
+    opacity: root.enabled ? (touch.pressed ? 0.7 : 1) : 0.38;
+    animate opacity { duration: 100ms; }
+    animate background { duration: 150ms; }
+    drop-shadow-blur: root.primary ? 8px : 0px;
+    drop-shadow-color: Theme.glow.with-alpha(30 / 255);
+    HorizontalLayout {
+        alignment: center; spacing: 8px; padding-left: 8px; padding-right: 8px;
+        if root.icon-path != "" : Rectangle {
+            width: 17px;
+            Path {
+                x: 0px; y: (parent.height - self.height) / 2; width: 17px; height: 17px; commands: root.icon-path;
+                viewbox-x: 0; viewbox-y: 0; viewbox-width: 17; viewbox-height: 17;
+                stroke: root.content-ink; stroke-width: 1.4px;
+                fill: root.fill-icon ? root.content-ink : transparent;
+            }
+        }
+        if root.text != "" : Text { text: root.text; color: root.content-ink; font-size: 13px; vertical-alignment: center; horizontal-alignment: center; }
+        if root.shortcut != "" : Text { text: root.shortcut; color: Theme.muted; font-family: "Consolas"; font-size: 11px; vertical-alignment: center; }
+    }
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " { root.clicked(); return accept; }
+            return reject;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { focus.focus(); root.clicked(); }
+    }
+}
+
+export component Heading inherits Text {
+    font-family: "Georgia"; font-size: 22px; color: Theme.ink;
+}
+export component Label inherits Text {
+    color: Theme.muted; font-size: 12px; vertical-alignment: center;
+}
+
+export component AmountSlider inherits Rectangle {
+    in-out property <float> value: 0;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback changed();
+    height: 30px;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: root.value;
+    accessible-value-minimum: 0;
+    accessible-value-maximum: 100;
+    forward-focus: slider-focus;
+    opacity: root.enabled ? 1 : 0.4;
+    Rectangle { x: 0px; y: 13px; width: parent.width; height: 4px; border-radius: 2px; background: Theme.track.with-alpha(56 / 255); }
+    Rectangle { x: 0px; y: 13px; width: root.value / 100 * parent.width; height: 4px; border-radius: 2px; background: Theme.accent; }
+    Rectangle {
+        x: Math.max(0px, Math.min(parent.width - 14px, root.value / 100 * parent.width - 7px));
+        y: 8px; width: 14px; height: 14px; border-radius: 7px;
+        background: Theme.knob; border-width: slider-focus.has-focus ? 2px : 1px; border-color: Theme.knob-rim;
+    }
+    slider-focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.LeftArrow || event.text == Key.RightArrow {
+                root.value = Math.max(0, Math.min(100, root.value + (event.text == Key.RightArrow ? 1 : -1)));
+                root.changed(); return accept;
+            }
+            if event.text == Key.Home || event.text == Key.End {
+                root.value = event.text == Key.Home ? 0 : 100; root.changed(); return accept;
+            }
+            return reject;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                slider-focus.focus(); root.value = Math.max(0, Math.min(100, self.mouse-x / self.width * 100)); root.changed();
+            }
+        }
+        moved => { if self.pressed { root.value = Math.max(0, Math.min(100, self.mouse-x / self.width * 100)); root.changed(); } }
+    }
+}
+
+export component CaptionButton inherits Rectangle {
+    in property <int> command;
+    in property <bool> maximized;
+    callback clicked();
+    width: 46px; height: 44px;
+    background: touch.has-hover ? (root.command == 2 ? #b94a6670 : #ffffff18) : transparent;
+    accessible-role: button;
+    accessible-label: root.command == 0 ? "Minimize" : (root.command == 1 ? "Maximize or restore" : "Close Feathercut");
+    accessible-action-default => { root.clicked(); }
+    forward-focus: caption-focus;
+    if root.command == 0 : Rectangle { x: 18px; y: 22px; width: 10px; height: 1px; background: Theme.ink; }
+    if root.command == 1 && !root.maximized : Rectangle { x: 18px; y: 17px; width: 10px; height: 10px; border-width: 1px; border-color: Theme.ink; background: transparent; }
+    if root.command == 1 && root.maximized : Rectangle {
+        x: 20px; y: 16px; width: 9px; height: 9px; border-width: 1px; border-color: Theme.ink; background: transparent;
+    }
+    if root.command == 1 && root.maximized : Rectangle {
+        x: 17px; y: 19px; width: 9px; height: 9px; border-width: 1px; border-color: Theme.ink; background: Theme.popup;
+    }
+    if root.command == 2 : Path {
+        x: 18px; y: 17px; width: 10px; height: 10px; viewbox-width: 10; viewbox-height: 10;
+        commands: "M 0 0 L 10 10 M 0 10 L 10 0"; stroke: Theme.ink; stroke-width: 1px;
+    }
+    caption-focus := FocusScope {
+        key-pressed(event) => { if event.text == Key.Return || event.text == " " { root.clicked(); return accept; } return reject; }
+    }
+    touch := TouchArea { clicked => { caption-focus.focus(); root.clicked(); } }
+}
+
+export component TimeField inherits Glass {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> enabled: true;
+    callback edited(string);
+    callback step(int);
+    border-radius: 8px; height: 48px;
+    border-color: editor.has-focus ? Theme.rim : Theme.line;
+    changed value => { editor.text = root.value; }
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 5px; spacing: 8px;
+        Text { text: root.label; color: Theme.ink; width: 27px; font-size: 13px; vertical-alignment: center; }
+        editor := TextInput {
+            enabled: root.enabled; text: root.value;
+            font-family: "Consolas"; font-size: 20px; color: Theme.ink;
+            selection-background-color: Theme.selection; selection-foreground-color: white;
+            vertical-alignment: center; single-line: true;
+            accepted => { root.edited(self.text); self.text = root.value; }
+            // Commit on focus loss, too, so clicking Export uses the entered bounds.
+            changed has-focus => { if !self.has-focus { root.edited(self.text); self.text = root.value; } }
+        }
+        Rectangle { width: 1px; height: 32px; background: Theme.line; }
+        VerticalLayout {
+            width: 26px; padding-top: 2px; padding-bottom: 2px; spacing: 0px;
+            Action { min-width: 24px; height: 22px; quiet: true; icon-path: "M 3 10 L 8 5 L 13 10"; enabled: root.enabled; clicked => { root.step(1); } }
+            Action { min-width: 24px; height: 22px; quiet: true; icon-path: "M 3 5 L 8 10 L 13 5"; enabled: root.enabled; clicked => { root.step(-1); } }
+        }
+    }
+}
+
+export component Choice inherits Glass {
+    in property <[string]> options;
+    in-out property <int> index: 0;
+    callback changed();
+    in property <bool> enabled: true;
+    height: 36px; border-radius: 8px;
+    HorizontalLayout {
+        spacing: 0px;
+        for option[idx] in root.options : Action {
+            text: option; height: parent.height; quiet: true;
+            selected: root.index == idx; enabled: root.enabled;
+            clicked => { root.index = idx; root.changed(); }
+        }
+    }
+}
+
+export component Select inherits Glass {
+    in property <[string]> options;
+    in-out property <int> index: 0;
+    in property <bool> enabled: true;
+    height: 38px; border-radius: 8px;
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 10px;
+        Label { text: root.options[root.index]; color: Theme.ink; horizontal-stretch: 1; }
+        Rectangle { width: 14px; Path { y: (parent.height - self.height) / 2; width: 14px; height: 10px; commands: "M 2 2 L 7 7 L 12 2"; stroke: Theme.muted; stroke-width: 1.4px; } }
+    }
+    Action {
+        width: parent.width; height: parent.height; quiet: true; enabled: root.enabled;
+        label: root.options[root.index];
+        clicked => { popup.show(); }
+    }
+    popup := PopupWindow {
+        y: root.height + 4px; width: root.width;
+        Rectangle {
+            background: Theme.popup; border-radius: 8px; border-width: 1px; border-color: Theme.rim.with-alpha(128 / 255);
+            VerticalLayout {
+                padding: 5px; spacing: 3px;
+                for option[idx] in root.options : Action {
+                    height: 34px; text: option; selected: root.index == idx;
+                    clicked => { root.index = idx; popup.close(); }
+                }
+            }
+        }
+    }
+}

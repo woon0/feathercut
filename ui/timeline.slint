@@ -1,0 +1,228 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme, Glass, Action, Label } from "glass.slint";
+export struct TimelineClip { id:int, name:string, start:float, duration:float, thumbnail:image, linked:bool, muted:bool, layer:int, waveform:[float] }
+
+export component ClipWorkspace inherits Rectangle {
+    in property <[TimelineClip]> videos;
+    in property <[TimelineClip]> audio;
+    in property <int> video-layers: 1;
+    in property <int> audio-layers: 1;
+    in property <int> selected: -1;
+    in property <bool> selected-audio;
+    in property <float> duration;
+    in property <float> position;
+    in property <bool> ctrl;
+    in-out property <float> span: 30;
+    in-out property <float> offset: 0;
+    in-out property <bool> scrubbing;
+    callback seek(float);
+    callback select(int,bool);
+    callback move(int,bool,float,int);
+    callback trim(bool,float);
+    callback split();
+    callback remove();
+    callback add-layer(bool);
+    callback context(int,bool,length,length);
+    property <length> gutter: 44px;
+    property <length> lane-width: root.width - root.gutter;
+    property <float> scale: root.lane-width / 1px / Math.max(root.span,0.001);
+    in property <bool> enabled: true;
+    callback gesture(bool);
+    property <int> dragging: -1;
+    property <float> drag-position;
+    property <int> drag-layer;
+    property <bool> dragging-audio;
+    property <int> trim-id: -1;
+    property <bool> trim-out;
+    property <float> trim-delta;
+    property <float> trim-origin;
+    property <int> trim-layer;
+    property <bool> trim-audio;
+    background: Theme.panel; border-radius: 8px; clip: true;
+    // The full strip above the clips is reserved for scrubbing.
+    ruler := Rectangle {
+        x: root.gutter; y: 0px; width: root.lane-width; height: 34px;
+        for tick in 11 : Rectangle {
+            x: tick/10*parent.width; y: 0px; width: 1px; height: 34px;
+            Text { x: tick==10 ? -42px : 4px; y: 0px; width: 40px; height: 18px; font-size: 10px; color: Theme.muted; text: Math.round((root.offset+tick/10*root.span)*10)/10+"s"; horizontal-alignment: tick==10 ? right : left; }
+            Rectangle { y: 26px; height: 8px; width: 1px; background: Theme.line; }
+        }
+        TouchArea { enabled: root.enabled;
+            mouse-cursor: ew-resize;
+            pointer-event(event) => {
+                if event.kind==PointerEventKind.down && event.button==PointerEventButton.left { root.scrubbing=true;root.seek(Math.max(0,self.mouse-x / self.width * root.span+root.offset)); }
+                if event.kind==PointerEventKind.up || event.kind==PointerEventKind.cancel {root.scrubbing=false;}
+            }
+            moved => {if self.pressed {root.seek(Math.max(0,self.mouse-x / self.width * root.span+root.offset));}}
+        }
+    }
+    tracks := ScrollView {
+        x: 0px; y: 34px; width: parent.width; height: parent.height - 80px;
+        viewport-height: root.video-layers*64px+root.audio-layers*44px+8px;
+        viewport-width: self.width;
+        for layer in root.video-layers : Text {x:4px; y:layer*64px; width:36px;height:64px;text:"V"+(root.video-layers - layer);font-size:11px;color:Theme.muted;vertical-alignment:center;}
+        for layer in root.audio-layers : Text {x:4px;y:root.video-layers*64px+8px+layer*44px;width:36px;height:44px;text:"A"+(layer+1);font-size:11px;color:Theme.muted;vertical-alignment:center;}
+        video-track := Rectangle {
+            x: root.gutter; y: 0px; width: root.lane-width; height: root.video-layers*64px; clip:true;
+            for layer in root.video-layers : Glass {y:layer*64px; width:parent.width; height:60px;border-radius:4px;}
+            for tick in 11 : Rectangle {x:tick/10*parent.width;width:1px;height:parent.height;background:Theme.line.with-alpha(30/255);}
+            for clip in root.videos : Rectangle {
+                property <bool> chosen: root.selected==clip.id && !root.selected-audio;
+                property <length> press-x;
+                property <length> press-y;
+                property <float> initial-span;
+                x: (clip.start - root.offset)*root.scale*1px; y: (root.video-layers - 1 - clip.layer)*64px+2px;
+                width: Math.max(2px,clip.duration*root.scale*1px); height:56px; clip:true;border-radius:4px;
+                opacity: root.dragging==clip.id ? 0.45 : 1;
+                Image {width:parent.width;height:parent.height;source:clip.thumbnail;image-fit:cover;}
+                Rectangle {y:parent.height - 18px;width:parent.width;height:18px;background:Theme.scrim.with-alpha(205/255);}
+                Text {x:7px;y:parent.height - 18px;width:parent.width - 14px;height:18px;text:clip.name;font-size:10px;color:Theme.ink;overflow:elide;vertical-alignment:center;}
+                if clip.linked && clip.waveform.length>0 : Rectangle {
+                    y:parent.height - 32px;width:parent.width;height:14px;background:Theme.scrim.with-alpha(90/255);
+                    for level[i] in clip.waveform : Rectangle {x:i/clip.waveform.length*parent.width;width:Math.max(1px,parent.width/clip.waveform.length - 1px);height:Math.max(1px,level*12px);y:(parent.height - self.height)/2;background:Theme.knob.with-alpha(205/255);}
+                }
+                TouchArea { enabled: root.enabled;
+                    mouse-cursor: grab;
+                    pointer-event(event) => {
+                        if event.kind==PointerEventKind.down && event.button==PointerEventButton.right {root.select(clip.id,false);root.context(clip.id,false,self.absolute-position.x+self.mouse-x,self.absolute-position.y+self.mouse-y);}
+                        if event.kind==PointerEventKind.down && event.button==PointerEventButton.left {root.gesture(true);parent.press-x=self.absolute-position.x+self.mouse-x;parent.press-y=self.absolute-position.y+self.mouse-y;parent.initial-span=root.span;root.select(clip.id,false);}
+                        if event.kind==PointerEventKind.up && event.button==PointerEventButton.left {if root.dragging==clip.id {root.move(clip.id,false,root.drag-position,root.drag-layer);}else{root.seek(Math.max(0,(parent.x+self.mouse-x)/root.scale/1px+root.offset));}root.dragging=-1;root.gesture(false);}
+                        if event.kind==PointerEventKind.cancel {root.dragging=-1;root.gesture(false);}
+                    }
+                    moved => {
+                        if self.pressed && (Math.abs(self.absolute-position.x+self.mouse-x - parent.press-x)>5px || Math.abs(self.absolute-position.y+self.mouse-y - parent.press-y)>5px) {
+                            root.dragging=clip.id;root.dragging-audio=false;
+                            root.drag-position=Math.max(0,clip.start+(self.absolute-position.x+self.mouse-x - parent.press-x)/root.lane-width*parent.initial-span);
+                            root.drag-layer=Math.max(0,Math.min(root.video-layers - 1,root.video-layers - 1 - Math.floor((parent.y+self.mouse-y)/64px)));
+                        }
+                    }
+                }
+                Rectangle {width:parent.width;height:parent.height;border-radius:4px;border-width:parent.chosen?2px:1px;border-color:parent.chosen?Theme.rim:Theme.line;background:transparent;}
+                for out in [false,true] : Rectangle {
+                    visible: parent.chosen;
+                    x: out ? parent.width - 9px : 0px; y:0px;width:9px;height:parent.height;
+                    background: handle.has-hover || root.trim-id==clip.id ? Theme.accent.with-alpha(160/255) : #ffffff08;
+                    property <length> press-x;
+                    property <float> initial-span;
+                    Rectangle {x:4px;y:8px;width:1px;height:parent.height - 16px;background:Theme.knob;}
+                    handle := TouchArea { enabled: root.enabled;
+                        mouse-cursor:ew-resize;
+                        pointer-event(event) => {
+                            if event.kind==PointerEventKind.down && event.button==PointerEventButton.left {root.gesture(true);parent.press-x=self.absolute-position.x+self.mouse-x;parent.initial-span=root.span;root.trim-id=clip.id;root.trim-out=out;root.trim-delta=0;root.trim-origin=clip.start+(out?clip.duration:0);root.trim-layer=clip.layer;root.trim-audio=false;}
+                            if event.kind==PointerEventKind.up && root.trim-id==clip.id {root.trim(out,root.trim-delta);root.trim-id=-1;root.gesture(false);}
+                            if event.kind==PointerEventKind.cancel {root.trim-id=-1;root.gesture(false);}
+                        }
+                        moved => {if self.pressed {root.trim-delta=(self.absolute-position.x+self.mouse-x - parent.press-x)/root.lane-width*parent.initial-span;}}
+                    }
+                }
+            }
+        }
+        audio-track := Rectangle {
+            x:root.gutter;y:root.video-layers*64px+8px;width:root.lane-width;height:root.audio-layers*44px;clip:true;
+            for layer in root.audio-layers : Glass {y:layer*44px;width:parent.width;height:40px;border-radius:4px;}
+            for tick in 11 : Rectangle {x:tick/10*parent.width;width:1px;height:parent.height;background:Theme.line.with-alpha(30/255);}
+            for clip in root.audio : Rectangle {
+                property <bool> chosen:root.selected==clip.id&&root.selected-audio;
+                property <length> press-x;
+                property <length> press-y;
+                property <float> initial-span;
+                x:(clip.start - root.offset)*root.scale*1px;y:clip.layer*44px+2px;width:Math.max(2px,clip.duration*root.scale*1px);height:36px;
+                border-radius:4px;background:Theme.soft.with-alpha(50/255);clip:true;opacity:clip.muted?0.4:(root.dragging==clip.id?0.45:1);
+                for level[i] in clip.waveform : Rectangle {x:i/clip.waveform.length*parent.width;width:Math.max(1px,parent.width/clip.waveform.length - 1px);y:2px+(18px - self.height)/2;height:Math.max(1px,level*18px);background:Theme.knob.with-alpha(210/255);}
+                Text {x:7px;y:20px;width:parent.width - 14px;height:14px;font-size:10px;color:Theme.ink;text:clip.name;overflow:elide;}
+                TouchArea { enabled: root.enabled;
+                    mouse-cursor:grab;
+                    pointer-event(event) => {
+                        if event.kind==PointerEventKind.down && event.button==PointerEventButton.right {root.select(clip.id,true);root.context(clip.id,true,self.absolute-position.x+self.mouse-x,self.absolute-position.y+self.mouse-y);}
+                        if event.kind==PointerEventKind.down && event.button==PointerEventButton.left {root.gesture(true);parent.press-x=self.absolute-position.x+self.mouse-x;parent.press-y=self.absolute-position.y+self.mouse-y;parent.initial-span=root.span;root.select(clip.id,true);}
+                        if event.kind==PointerEventKind.up && event.button==PointerEventButton.left {if root.dragging==clip.id{root.move(clip.id,true,root.drag-position,root.drag-layer);}else{root.seek(Math.max(0,(parent.x+self.mouse-x)/root.scale/1px+root.offset));}root.dragging=-1;root.gesture(false);}
+                        if event.kind==PointerEventKind.cancel{root.dragging=-1;root.gesture(false);}
+                    }
+                    moved => {if self.pressed && (Math.abs(self.absolute-position.x+self.mouse-x - parent.press-x)>5px || Math.abs(self.absolute-position.y+self.mouse-y - parent.press-y)>5px) {root.dragging=clip.id;root.dragging-audio=true;root.drag-position=Math.max(0,clip.start+(self.absolute-position.x+self.mouse-x - parent.press-x)/root.lane-width*parent.initial-span);root.drag-layer=Math.max(0,Math.min(root.audio-layers - 1,Math.floor((parent.y+self.mouse-y)/44px)));}}
+                }
+                Rectangle {width:parent.width;height:parent.height;border-radius:4px;border-width:parent.chosen?2px:1px;border-color:parent.chosen?Theme.rim:Theme.line;background:transparent;}
+                for out in [false,true] : Rectangle {
+                    visible:parent.chosen;x:out?parent.width - 9px:0px;width:9px;height:parent.height;background:audio-handle.has-hover?Theme.accent.with-alpha(160/255):#ffffff08;
+                    property <length> press-x;
+                property <length> press-y;
+                    property <float> initial-span;
+                    Rectangle {x:4px;y:7px;width:1px;height:parent.height - 14px;background:Theme.knob;}
+                    audio-handle := TouchArea { enabled: root.enabled;mouse-cursor:ew-resize;
+                        pointer-event(event) => {if event.kind==PointerEventKind.down{root.gesture(true);parent.press-x=self.absolute-position.x+self.mouse-x;parent.initial-span=root.span;root.trim-id=clip.id;root.trim-delta=0;root.trim-origin=clip.start+(out?clip.duration:0);root.trim-layer=clip.layer;root.trim-audio=true;}if event.kind==PointerEventKind.up&&root.trim-id==clip.id{root.trim(out,root.trim-delta);root.trim-id=-1;root.gesture(false);}if event.kind==PointerEventKind.cancel{root.trim-id=-1;root.gesture(false);}}
+                        moved => {if self.pressed{root.trim-delta=(self.absolute-position.x+self.mouse-x - parent.press-x)/root.lane-width*parent.initial-span;}}
+                    }
+                }
+            }
+        }
+        if root.position>=root.offset&&root.position<=root.offset+root.span : Rectangle {x:root.gutter+(root.position - root.offset)*root.scale*1px;width:1px;height:tracks.viewport-height;background:Theme.accent;}
+        if root.dragging>=0 : Rectangle {x:root.gutter+(root.drag-position - root.offset)*root.scale*1px;y:root.dragging-audio?root.video-layers*64px+8px+root.drag-layer*44px:(root.video-layers - 1 - root.drag-layer)*64px;width:2px;height:root.dragging-audio?40px:60px;background:Theme.focus;}
+        if root.trim-id>=0 : Rectangle {
+            x:root.gutter+(root.trim-origin+root.trim-delta - root.offset)*root.scale*1px;width:2px;height:tracks.viewport-height;background:Theme.focus;
+        }
+    }
+    if root.position>=root.offset&&root.position<=root.offset+root.span : Rectangle {
+        x:root.gutter+(root.position - root.offset)*root.scale*1px - 5px;y:18px;width:10px;height:16px;border-radius:3px;background:Theme.accent;
+        TouchArea { enabled: root.enabled;mouse-cursor:ew-resize;
+            pointer-event(event) => {if event.kind==PointerEventKind.down{root.scrubbing=true;}if event.kind==PointerEventKind.up||event.kind==PointerEventKind.cancel{root.scrubbing=false;}}
+            moved => {if self.pressed{root.seek(Math.max(0,(parent.x+self.mouse-x - root.gutter)/root.lane-width*root.span+root.offset));}}
+        }
+    }
+    Text {x:root.gutter;y:parent.height - 44px;width:parent.width - root.gutter;height:16px;text:root.dragging>=0?"Release to place clip · drag onto another layer to overlap":(root.trim-id>=0?"Release to trim":"Ruler scrubs · clips move · edges trim · right-click for actions");font-size:10px;color:Theme.muted;overflow:elide;}
+    HorizontalLayout {
+        y:parent.height - 28px;height:28px;width:parent.width;spacing:4px;
+        Action {enabled:root.enabled;text:"Split";shortcut:"S";explanation:"Split selected clip at playhead";height:28px;clicked=>{root.split();}}
+        Action {enabled:root.enabled;text:"V+";explanation:"Add video layer";height:28px;width:36px;clicked=>{root.add-layer(false);}}
+        Action {enabled:root.enabled;text:"A+";explanation:"Add audio layer";height:28px;width:36px;clicked=>{root.add-layer(true);}}
+        Rectangle {horizontal-stretch:1;}
+        Action {enabled:root.enabled;text:"‹";explanation:"Pan earlier";height:28px;width:28px;clicked=>{root.offset=Math.max(0,root.offset - root.span/2);}}
+        Action {enabled:root.enabled;text:"−";explanation:"Zoom out";height:28px;width:28px;clicked=>{root.span=Math.min(86400,root.span*1.5);}}
+        Action {enabled:root.enabled;text:"+";explanation:"Zoom in";height:28px;width:28px;clicked=>{root.span=Math.max(1,root.span/1.5);}}
+        Action {enabled:root.enabled;text:"Fit";explanation:"Fit all clips with trailing space";height:28px;width:36px;clicked=>{root.offset=0;root.span=Math.max(5,root.duration*1.3);}}
+        Action {enabled:root.enabled;text:"›";explanation:"Pan later";height:28px;width:28px;clicked=>{root.offset=Math.min(root.duration,root.offset+root.span/2);}}
+        Action {enabled:root.enabled;text:"Remove";explanation:"Remove selected clip · Delete";quiet:true;height:28px;clicked=>{root.remove();}}
+    }
+}
+
+export component SimpleTrimBar inherits Rectangle {
+    in property <[image]> thumbnails;
+    in property <float> duration:1;
+    in property <float> position;
+    in-out property <float> input;
+    in-out property <float> output:1;
+    in property <float> fps:30;
+    callback pause();
+    in property <string> in-text;
+    in property <string> out-text;
+    in property <string> end-text;
+    in-out property <bool> scrubbing;
+    callback seek(float);
+    callback change-in(float);
+    callback change-out(float);
+    track:=Glass {
+        y:2px;width:parent.width;height:63px;border-radius:7px;clip:true;
+        HorizontalLayout {spacing:0px;for thumbnail in root.thumbnails : Image {source:thumbnail;image-fit:cover;horizontal-stretch:1;}}
+        Rectangle {x:0px;width:root.input/Math.max(root.duration,0.001)*parent.width;height:parent.height;background:Theme.scrim.with-alpha(168/255);}
+        Rectangle {x:root.output/Math.max(root.duration,0.001)*parent.width;width:parent.width - self.x;height:parent.height;background:Theme.scrim.with-alpha(168/255);}
+        Rectangle {x:root.input/Math.max(root.duration,0.001)*parent.width;width:(root.output - root.input)/Math.max(root.duration,0.001)*parent.width;height:parent.height;background:Theme.selected.with-alpha(56/255);border-width:1px;border-color:Theme.rim;}
+        TouchArea {mouse-cursor:pointer;
+            pointer-event(event)=>{if event.kind==PointerEventKind.down&&event.button==PointerEventButton.left{root.scrubbing=true;root.seek(self.mouse-x/self.width*root.duration);}if event.kind==PointerEventKind.up||event.kind==PointerEventKind.cancel{root.scrubbing=false;}}
+            moved=>{if self.pressed{root.seek(Math.max(0,Math.min(1,self.mouse-x/self.width))*root.duration);}}
+        }
+    }
+    for out in [false,true] : Rectangle {
+        property <float> point:out?root.output:root.input;
+        property <length> grab-offset;
+        property <float> original-point;
+        x:Math.max(0px,Math.min(track.width - 14px,self.point/Math.max(root.duration,0.001)*track.width - 7px));y:17px;width:14px;height:34px;border-radius:4px;background:Theme.accent;border-width:1px;border-color:Theme.knob;
+        Rectangle {x:6px;y:9px;width:2px;height:16px;background:Theme.knob;}
+        TouchArea {mouse-cursor:ew-resize;
+            pointer-event(event)=>{if event.kind==PointerEventKind.down{parent.grab-offset=parent.x+self.mouse-x - parent.point/Math.max(root.duration,0.001)*track.width;parent.original-point=parent.point;root.scrubbing=true;root.pause();}if event.kind==PointerEventKind.up{if out{root.change-out(root.output);}else{root.change-in(root.input);}root.scrubbing=false;}if event.kind==PointerEventKind.cancel{if out{root.output=parent.original-point;}else{root.input=parent.original-point;}root.scrubbing=false;}}
+            moved=>{if self.pressed{let target=(parent.x+self.mouse-x - parent.grab-offset)/track.width*root.duration;if out{root.output=Math.max(root.input+1/root.fps,Math.min(root.duration,target));}else{root.input=Math.max(0,Math.min(root.output - 1/root.fps,target));}}}
+        }
+    }
+    Rectangle {x:root.position/Math.max(root.duration,0.001)*parent.width;y:-3px;width:1px;height:74px;background:Theme.accent;Rectangle{x:-4px;y:-2px;width:9px;height:9px;border-radius:5px;background:Theme.accent;}}
+    Label {y:73px;x:0px;text:"00:00.0";}
+    Label {y:73px;x:parent.width - self.width;text:root.end-text;}
+    if root.input>root.duration*0.13&&root.input<root.duration*0.87 : Label {y:73px;x:root.input/root.duration*parent.width - self.width/2;text:root.in-text;}
+    if root.output>root.duration*0.13&&root.output<root.duration*0.87&&root.output - root.input>root.duration*0.17 : Label {y:73px;x:root.output/root.duration*parent.width - self.width/2;text:root.out-text;}
+}
