@@ -1,6 +1,8 @@
 # Feathercut
 
-A lightweight, precision video trimmer and sequencer for Windows with a native glass UI.
+Lightweight video editor with target file size compression.
+
+_Subsecond launch time; Targetted compression; Simple and quick_
 
 ---
 
