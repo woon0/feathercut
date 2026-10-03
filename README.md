@@ -8,7 +8,7 @@ _Subsecond launch time; Targetted compression; Simple and quick_
 
 ### Download
 
-For the official prebuilt application with all playback engines, codecs, and media dependencies bundled, get Feathercut on the **Microsoft Store** (€1).
+For the official prebuilt application with all playback engines, codecs, and media dependencies bundled, get Feathercut on the **Microsoft Store** (€1). You can also build it yourself following the instructions below.
 
 ---
 
